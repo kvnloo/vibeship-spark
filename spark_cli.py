@@ -39,6 +39,7 @@ from lib.conflict_resolver import ConflictResolver, ResolutionStrategy
 from lib.spark_dashboard import SparkDashboard, DashboardView
 from lib.spark_debugger import SparkDebugger, DebugLevel
 from lib.spark_backup import SparkBackup, BackupType
+from lib.witness import SparkWitness
 
 
 def print_banner():
@@ -185,13 +186,78 @@ def cmd_hooks():
     print()
 
 
+def cmd_witness(verbose: bool = False):
+    """Unified Witness - what's really going on?"""
+    witness = SparkWitness()
+    print(witness.explain(verbose=verbose))
+
+
 async def cmd_health():
-    """Comprehensive health check of all M1-M11 components (20 components)."""
-    print("\n  M1-M11 Health Check (20 Components)")
+    """Comprehensive health check of all M1-M11 components (21 components)."""
+    print("\n  M1-M11 Health Check (21 Components)")
     print("  " + "-" * 50)
 
     results = {}
     mind = MindClient()
+
+    # M0: Hook Validation (Critical - entry point for everything)
+    print("\n  [M0] Hook Validation...")
+    try:
+        import json
+        settings_path = Path.home() / ".claude" / "settings.json"
+
+        # Required hooks for Spark to function
+        REQUIRED_HOOKS = [
+            "SessionStart",
+            "UserPromptSubmit",  # Critical for goal capture
+            "PreToolUse",
+            "PostToolUse",
+            "PostToolUseFailure",
+            "Stop",
+            "SessionEnd"
+        ]
+
+        if not settings_path.exists():
+            print("       [FAIL] Settings file not found: ~/.claude/settings.json")
+            results["M0_Hooks"] = False
+        else:
+            with open(settings_path) as f:
+                settings = json.load(f)
+
+            hooks = settings.get("hooks", {})
+            missing = []
+            invalid = []
+
+            for hook_name in REQUIRED_HOOKS:
+                if hook_name not in hooks:
+                    missing.append(hook_name)
+                else:
+                    # Validate hook command exists
+                    hook_config = hooks[hook_name]
+                    if hook_config and len(hook_config) > 0:
+                        inner_hooks = hook_config[0].get("hooks", [])
+                        for h in inner_hooks:
+                            cmd = h.get("command", "")
+                            # Extract script path from command
+                            if "python" in cmd:
+                                parts = cmd.split('"')
+                                if len(parts) >= 2:
+                                    script_path = Path(parts[1])
+                                    if not script_path.exists():
+                                        invalid.append(f"{hook_name}: {script_path.name}")
+
+            if missing:
+                print(f"       [FAIL] Missing hooks: {', '.join(missing)}")
+                results["M0_Hooks"] = False
+            elif invalid:
+                print(f"       [WARN] Invalid scripts: {', '.join(invalid)}")
+                results["M0_Hooks"] = False
+            else:
+                print(f"       [OK] All {len(REQUIRED_HOOKS)} required hooks configured")
+                results["M0_Hooks"] = True
+    except Exception as e:
+        print(f"       [FAIL] {e}")
+        results["M0_Hooks"] = False
 
     # M1: Queue
     print("\n  [M1] Queue System...")
@@ -617,6 +683,7 @@ def main():
         epilog="""
 Commands:
   status      Show current Spark status
+  witness     Unified view of what's happening (recommended)
   learn       Process pending events now
   reflect     Run deep reflection on learnings
   learnings   Show what Spark has learned
@@ -628,11 +695,13 @@ Commands:
     )
 
     parser.add_argument("command", nargs="?", default="status",
-                       choices=["status", "learn", "reflect", "learnings",
+                       choices=["status", "witness", "learn", "reflect", "learnings",
                                "watch", "clear", "hooks", "health"],
                        help="Command to run")
     parser.add_argument("--interval", type=int, default=15,
                        help="Watch interval in seconds (default: 15)")
+    parser.add_argument("-v", "--verbose", action="store_true",
+                       help="Verbose output (for witness command)")
 
     args = parser.parse_args()
 
@@ -640,6 +709,8 @@ Commands:
 
     if args.command == "status":
         asyncio.run(cmd_status())
+    elif args.command == "witness":
+        cmd_witness(verbose=args.verbose)
     elif args.command == "learn":
         asyncio.run(cmd_learn())
     elif args.command == "reflect":

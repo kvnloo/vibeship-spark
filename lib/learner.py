@@ -460,7 +460,123 @@ class SparkLearner:
                     )
                     patterns.append(pattern)
 
+        # Pattern 7: Timing patterns (what's fast, what's slow)
+        timing_patterns = self._extract_timing_patterns()
+        patterns.extend(timing_patterns)
+
         return patterns
+
+    def _extract_timing_patterns(self) -> List[Pattern]:
+        """Extract patterns related to execution timing."""
+        patterns = []
+
+        # Timing thresholds (in ms)
+        SLOW_THRESHOLD_MS = 5000  # 5 seconds
+        FAST_THRESHOLD_MS = 100   # 100ms
+
+        # Pattern 7a: Slow tools
+        for tool_name, stats in self.tool_stats.items():
+            if stats.total_calls >= 3 and stats.avg_duration_ms > SLOW_THRESHOLD_MS:
+                pattern = Pattern(
+                    pattern_type="slow_tool",
+                    description=f"{tool_name} averages {stats.avg_duration_ms/1000:.1f}s - consider optimizing",
+                    conditions=[f"tool={tool_name}"],
+                    confidence=min(stats.total_calls / 10, 1.0),
+                    sample_size=stats.total_calls,
+                    metadata={
+                        "tool": tool_name,
+                        "avg_duration_ms": stats.avg_duration_ms,
+                        "suggestion": self._get_timing_suggestion(tool_name, stats.avg_duration_ms)
+                    }
+                )
+                patterns.append(pattern)
+
+        # Pattern 7b: Fast tools (to reinforce good patterns)
+        for tool_name, stats in self.tool_stats.items():
+            if (stats.total_calls >= 5 and
+                stats.avg_duration_ms < FAST_THRESHOLD_MS and
+                stats.success_rate > 0.8):
+                pattern = Pattern(
+                    pattern_type="fast_tool",
+                    description=f"{tool_name} is fast ({stats.avg_duration_ms:.0f}ms avg) with {stats.success_rate:.0%} success",
+                    conditions=[f"tool={tool_name}"],
+                    confidence=min(stats.total_calls / 15, 1.0),
+                    sample_size=stats.total_calls,
+                    metadata={
+                        "tool": tool_name,
+                        "avg_duration_ms": stats.avg_duration_ms,
+                        "success_rate": stats.success_rate,
+                        "recommendation": "prefer"
+                    }
+                )
+                patterns.append(pattern)
+
+        # Pattern 7c: Tool timing comparisons (one tool faster than another for same task)
+        timing_comparisons = self._find_timing_comparisons()
+        for faster, slower, category, speedup in timing_comparisons:
+            if speedup > 2.0:  # At least 2x faster
+                pattern = Pattern(
+                    pattern_type="timing_comparison",
+                    description=f"For {category}: {faster} is {speedup:.1f}x faster than {slower}",
+                    conditions=[f"task_type={category}"],
+                    confidence=0.7,  # Moderate confidence for comparisons
+                    sample_size=2,
+                    metadata={
+                        "faster_tool": faster,
+                        "slower_tool": slower,
+                        "task_category": category,
+                        "speedup_factor": speedup
+                    }
+                )
+                patterns.append(pattern)
+
+        return patterns
+
+    def _get_timing_suggestion(self, tool_name: str, avg_ms: float) -> str:
+        """Get suggestion for improving slow tool usage."""
+        suggestions = {
+            "Grep": "Use more specific patterns, limit path scope, or use glob filter",
+            "Glob": "Use more specific patterns to reduce file matching",
+            "Bash": "Break into smaller commands or use timeout parameter",
+            "Task": "Use more specific agent type or reduce prompt complexity",
+            "Read": "Read specific line ranges instead of entire file",
+            "WebFetch": "Consider caching or check network connectivity",
+            "WebSearch": "Use more specific search terms",
+        }
+        return suggestions.get(tool_name, "Consider breaking into smaller operations")
+
+    def _find_timing_comparisons(self) -> List[Tuple[str, str, str, float]]:
+        """
+        Find tools that are faster than others for similar tasks.
+
+        Returns: List of (faster_tool, slower_tool, task_category, speedup_factor)
+        """
+        comparisons = []
+
+        # Group tools by task category
+        SEARCH_TOOLS = {"Grep", "Glob", "Read"}
+        AGENT_TOOLS = {"Task"}
+        EDIT_TOOLS = {"Edit", "Write"}
+
+        def get_category_tools(category_set: set) -> List[Tuple[str, float]]:
+            return [
+                (name, stats.avg_duration_ms)
+                for name, stats in self.tool_stats.items()
+                if name in category_set and stats.total_calls >= 3 and stats.avg_duration_ms > 0
+            ]
+
+        # Compare within search tools
+        search_timings = get_category_tools(SEARCH_TOOLS)
+        if len(search_timings) >= 2:
+            search_timings.sort(key=lambda x: x[1])  # Sort by duration (fastest first)
+            fastest, fastest_time = search_timings[0]
+            slowest, slowest_time = search_timings[-1]
+            if fastest_time > 0:
+                speedup = slowest_time / fastest_time
+                if speedup > 1.5:
+                    comparisons.append((fastest, slowest, "search", speedup))
+
+        return comparisons
 
     def _extract_goal_patterns(self) -> List[Pattern]:
         """Extract patterns from completed goals."""
@@ -586,13 +702,24 @@ class SparkLearner:
         return results
 
     async def store_patterns_in_mind(self, patterns: List[Pattern]):
-        """Store extracted patterns in Mind as learnings."""
+        """Store extracted patterns in Mind as learnings with deduplication."""
         memories = []
+
+        # Load existing patterns for deduplication
+        existing_patterns = await self._get_existing_pattern_signatures()
 
         for pattern in patterns:
             # Lower threshold for goal strategies (early learning)
             min_confidence = 0.5 if pattern.pattern_type == "goal_strategy" else 0.7
             if pattern.confidence >= min_confidence:
+                # Create signature for deduplication
+                signature = self._create_pattern_signature(pattern)
+
+                # Skip if similar pattern already exists
+                if signature in existing_patterns:
+                    # Update confidence in memory of this duplicate
+                    continue
+
                 memory = Memory(
                     content=f"LEARNING [{pattern.pattern_type.upper()}]: {pattern.description}. "
                            f"Conditions: {', '.join(pattern.conditions)}. "
@@ -600,14 +727,91 @@ class SparkLearner:
                     temporal_level=TemporalLevel.IDENTITY,
                     salience=pattern.confidence,
                     content_type=ContentType.REFLECTION,
-                    metadata=pattern.metadata
+                    metadata={**pattern.metadata, "signature": signature}
                 )
                 memories.append(memory)
+                # Track this as now existing
+                existing_patterns.add(signature)
 
         if memories:
             stored = await self.mind.store_batch(memories)
             return stored
         return 0
+
+    def _create_pattern_signature(self, pattern: Pattern) -> str:
+        """Create a unique signature for pattern deduplication."""
+        # Signature based on type + key conditions
+        if pattern.pattern_type == "tool_effectiveness":
+            tool = pattern.metadata.get("tool", "")
+            return f"tool_eff:{tool}"
+        elif pattern.pattern_type == "error_category":
+            tool = pattern.metadata.get("tool", "")
+            error = pattern.metadata.get("error_category", "")
+            return f"error:{tool}:{error}"
+        elif pattern.pattern_type == "tool_sequence":
+            seq = pattern.metadata.get("sequence", [])
+            return f"seq:{'-'.join(seq) if seq else ''}"
+        elif pattern.pattern_type == "goal_strategy":
+            goal_type = pattern.metadata.get("goal_type", "")
+            return f"goal:{goal_type}"
+        elif pattern.pattern_type in ("overconfidence", "prediction_accuracy"):
+            tool = pattern.metadata.get("tool", "")
+            return f"{pattern.pattern_type}:{tool}"
+        elif pattern.pattern_type == "reasoning_gap":
+            # Use first 30 chars of description for uniqueness
+            return f"reasoning:{pattern.description[:30]}"
+        elif pattern.pattern_type in ("slow_tool", "fast_tool"):
+            tool = pattern.metadata.get("tool", "")
+            return f"{pattern.pattern_type}:{tool}"
+        elif pattern.pattern_type == "timing_comparison":
+            faster = pattern.metadata.get("faster_tool", "")
+            slower = pattern.metadata.get("slower_tool", "")
+            category = pattern.metadata.get("task_category", "")
+            return f"timing_cmp:{category}:{faster}:{slower}"
+        else:
+            # Fallback: use conditions
+            return f"{pattern.pattern_type}:{':'.join(pattern.conditions)}"
+
+    async def _get_existing_pattern_signatures(self) -> set:
+        """Get signatures of patterns already stored in Mind."""
+        signatures = set()
+
+        try:
+            # Query for existing learnings
+            learnings = await self.mind.retrieve(
+                query="LEARNING",
+                limit=100,
+                temporal_level=TemporalLevel.IDENTITY,
+                content_type=ContentType.REFLECTION
+            )
+
+            for learning in learnings:
+                # Extract signature from metadata if present
+                metadata = learning.get("metadata", {})
+                if "signature" in metadata:
+                    signatures.add(metadata["signature"])
+                else:
+                    # Generate signature from content for older patterns
+                    content = learning.get("content", "")
+                    # Extract pattern type from content
+                    if "TOOL_EFFECTIVENESS" in content:
+                        tool = metadata.get("tool", "")
+                        if tool:
+                            signatures.add(f"tool_eff:{tool}")
+                    elif "ERROR_CATEGORY" in content:
+                        tool = metadata.get("tool", "")
+                        error = metadata.get("error_category", "")
+                        if tool and error:
+                            signatures.add(f"error:{tool}:{error}")
+                    elif "GOAL_STRATEGY" in content:
+                        goal_type = metadata.get("goal_type", "")
+                        if goal_type:
+                            signatures.add(f"goal:{goal_type}")
+
+        except Exception:
+            pass  # If Mind unavailable, proceed without dedup
+
+        return signatures
 
     async def get_recommendation(self, tool_name: str, context: Dict[str, Any]) -> Optional[str]:
         """Get a recommendation for using a tool based on learnings."""

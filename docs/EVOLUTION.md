@@ -3,8 +3,8 @@
 > This document tracks Spark's self-improvement journey - what's been built, what works, what's missing, and the path forward.
 
 **Last Updated:** 2026-01-23
-**Current Version:** M11 Complete + Self-Analysis Fixes
-**Health Status:** 20/20 components healthy
+**Current Version:** M11 Complete + Self-Analysis Fixes + Timing Patterns
+**Health Status:** 21/21 components healthy
 
 ---
 
@@ -44,6 +44,10 @@
 - **Goal Strategy Persistence** - Store strategies to Mind
 - **UserPromptSubmit Hook** - CRITICAL FIX for goal capture
 - **Improved Classification** - Better goal type detection
+- **Hook Validation** - Health check validates all 7 required hooks
+- **Pattern Deduplication** - Prevent duplicate storage in Mind
+- **Timing Patterns** - Learn slow tools, fast tools, and comparisons
+- **Fixed prompt field** - UserPromptSubmit uses 'prompt' not 'message'
 
 ---
 
@@ -87,15 +91,15 @@ Tool Sequences:
 
 | Gap | Impact | Solution |
 |-----|--------|----------|
-| No hook validation | Bugs like missing UserPromptSubmit go undetected | Add hook config check to health |
+| ~~No hook validation~~ | ~~Bugs like missing UserPromptSubmit go undetected~~ | **FIXED** - M0 Hook Validation in health check |
 | Goal classification limited | Many prompts classify as "unknown" | Expand keyword lists, add ML |
-| Duplicate pattern storage | Same patterns stored multiple times | Add deduplication logic |
+| ~~Duplicate pattern storage~~ | ~~Same patterns stored multiple times~~ | **FIXED** - Signature-based deduplication |
 
 ### Important (Medium Priority)
 
 | Gap | Impact | Solution |
 |-----|--------|----------|
-| No timing patterns | Can't learn "X is faster than Y" | Add duration tracking to events |
+| ~~No timing patterns~~ | ~~Can't learn "X is faster than Y"~~ | **FIXED** - slow_tool, fast_tool, timing_comparison patterns |
 | No error recovery learning | Can't learn "when X fails, try Y" | Track failure->success sequences |
 | No confidence calibration | Predictions don't improve over time | Track prediction accuracy history |
 | No parallel pattern learning | Can't learn which tools work together | Detect concurrent tool calls |
@@ -208,14 +212,16 @@ python spark_live.py advice
 ## Next Evolution Priorities
 
 ### Immediate (Next Session)
-1. **Add hook validation to health check** - Detect missing hooks
-2. **Add pattern deduplication** - Prevent duplicate storage
-3. **Expand goal classification** - More keywords, better accuracy
+1. ~~**Add hook validation to health check**~~ - **DONE**
+2. ~~**Add pattern deduplication**~~ - **DONE**
+3. ~~**Timing patterns**~~ - **DONE**
+4. **Expand goal classification** - More keywords, better accuracy
+5. **Error recovery learning** - Track failure->success sequences
 
 ### Short-term (This Week)
-1. **Timing patterns** - Track tool duration, learn fast paths
-2. **Error recovery learning** - Track what fixes work
-3. **Confidence calibration** - Improve prediction accuracy
+1. **Confidence calibration** - Improve prediction accuracy over time
+2. **Parallel pattern learning** - Detect concurrent tool calls
+3. **Fix test failures** - Update tests for new tuple return format
 
 ### Medium-term (This Month)
 1. **Self-testing framework** - Automated validation
@@ -240,6 +246,9 @@ python spark_live.py advice
 - The observer and learner must be separate processes
 - File-based state is simple and works for cross-process sharing
 - Self-analysis is valuable - should do it regularly
+- Always verify hook data format against Claude Code docs (prompt vs message)
+- Deduplication should use signatures, not content comparison (faster)
+- Timing patterns need thresholds calibrated to actual usage
 
 ---
 
@@ -248,18 +257,20 @@ python spark_live.py advice
 Use this after restarting Claude Code:
 
 ```
-I'm continuing Spark's self-evolution. The UserPromptSubmit hook was just added
-to settings.json. Please verify it's working by:
+I'm continuing Spark's self-evolution. Last session completed:
+1. Fixed observe.py to use 'prompt' field (was 'message') - goal capture now works
+2. Added hook validation to health check (21/21 components now)
+3. Added pattern deduplication (signature-based, prevents duplicate Mind storage)
+4. Added timing patterns (slow_tool, fast_tool, timing_comparison)
 
-1. Run `python spark_cli.py health` - should show 20/20 healthy
-2. Check if THIS message captured a goal: Look in ~/.spark/active_goals.json
-3. If goal capture works, continue with next evolution priorities:
-   - Add hook validation to health check
-   - Add pattern deduplication
-   - Implement timing patterns
+To verify: Run `python spark_cli.py health` - should show 21/21 healthy
 
-The evolution documentation is at docs/EVOLUTION.md - update it as you progress.
-Previous session fixed: UserPromptSubmit hook, strategy injection, goal persistence.
+Next priorities from docs/EVOLUTION.md:
+- Expand goal classification (many prompts still "unknown")
+- Error recovery learning (track failure->success sequences)
+- Confidence calibration (improve prediction accuracy)
+
+Check if THIS prompt captured a goal: `type %USERPROFILE%\.spark\active_goals.json`
 ```
 
 ---

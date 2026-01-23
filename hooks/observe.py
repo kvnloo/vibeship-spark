@@ -478,7 +478,7 @@ def main():
 
     # GOALS: Capture goal from user prompt
     if event_type == EventType.USER_PROMPT:
-        user_message = input_data.get("message", "")
+        user_message = input_data.get("prompt", "")  # Claude Code sends 'prompt', not 'message'
         if user_message:
             # Capture new goal
             goal_info = capture_goal(session_id, user_message)
