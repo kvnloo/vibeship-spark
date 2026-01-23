@@ -29,6 +29,7 @@ from lib.meta_learner import MetaLearner
 from lib.suggester import Suggester
 from lib.project_analyzer import ProjectAnalyzer, ProjectType
 from lib.learning_transfer import LearningTransfer, LearningScope
+from lib.pattern_breeder import PatternBreeder, PopulationStats
 
 
 def print_banner():
@@ -354,6 +355,34 @@ async def cmd_health():
     except Exception as e:
         print(f"       [FAIL] {e}")
         results["M6_LearningTransfer"] = False
+
+    # M7: Pattern Breeder
+    print("\n  [M7] Pattern Breeder...")
+    try:
+        from lib.prompt_evolver import PromptPattern
+        breeder = PatternBreeder(population_size=10, mutation_rate=0.2)
+        # Create seed patterns
+        seed_patterns = [
+            PromptPattern(
+                pattern_id=f"seed_{i}",
+                pattern_type="tool_sequence",
+                description=f"Seed pattern {i}",
+                trigger_conditions={"task_category": "search"},
+                approach=f"Approach {i}",
+                total_uses=10,
+                success_count=8,
+                failure_count=2
+            )
+            for i in range(3)
+        ]
+        count = breeder.initialize_population(seed_patterns)
+        stats = breeder.evolve_generation()
+        print(f"       [OK] Population: {count}, Gen: {breeder.generation}")
+        print(f"           Avg fitness: {stats.avg_fitness:.2f}, Diversity: {stats.diversity_score:.2f}")
+        results["M7_PatternBreeder"] = True
+    except Exception as e:
+        print(f"       [FAIL] {e}")
+        results["M7_PatternBreeder"] = False
 
     # Summary
     print("\n  " + "=" * 50)
