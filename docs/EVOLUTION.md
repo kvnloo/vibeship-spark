@@ -54,7 +54,8 @@
 - **Introspection** - Self-aware gap analysis: blind spots, missing patterns, overconfidence (`lib/introspect.py`)
 - **Auto-Improve** - Act on gaps automatically: create learnings, flag extractions, calibrate (`lib/auto_improve.py`)
 - **Self-Awareness Injection** - Session start now injects known gaps and struggling goal types
-- **Recursive Loop Complete** - Introspect -> Improve -> Inject -> Verify
+- **Autonomous Evolution** - Daemon runs introspection every N cycles automatically (`processor.py`)
+- **Recursive Loop Complete** - Introspect -> Improve -> Inject -> Verify (runs without intervention)
 
 ---
 
@@ -75,6 +76,7 @@
 | Self-introspection | 85% | Identifies blind spots, missing patterns |
 | Auto-improvement | 80% | Acts on gaps automatically |
 | Self-awareness injection | 90% | Known gaps injected at session start |
+| Autonomous evolution | 95% | Daemon runs introspect/improve every N cycles |
 
 ### Strong Patterns Learned
 
@@ -211,6 +213,9 @@ python processor.py --mode once
 # Deep reflection
 python processor.py --mode reflect
 
+# Autonomous daemon (self-improves every 10 cycles by default)
+python processor.py --mode daemon --interval 30 --introspect-every 10
+
 # Self-analysis commands
 python spark_cli.py witness          # Unified view of all systems
 python spark_cli.py introspect       # Self-aware gap analysis
@@ -283,18 +288,22 @@ Use this after restarting Claude Code:
 
 ```
 I'm continuing Spark's self-evolution. Last session completed:
-1. Created Unified Witness (lib/witness.py) - holistic system view
-2. Created Introspection (lib/introspect.py) - self-aware gap analysis
-3. Created Auto-Improve (lib/auto_improve.py) - act on gaps automatically
-4. Integrated self-awareness injection into session_start.py
-5. The recursive loop is complete: introspect -> improve -> inject -> verify
+1. Made Spark truly autonomous - daemon now runs introspection every N cycles
+2. Recursive self-improvement works without human intervention
+3. processor.py --mode daemon --introspect-every 10 runs the full loop
 
 To verify: Run `python spark_cli.py health` - should show 21/21 healthy
 
-New commands:
+Key commands:
+- `python processor.py --mode daemon --interval 30` - Autonomous self-evolution
 - `python spark_cli.py witness` - Unified view of all systems
-- `python spark_cli.py introspect` - Self-aware gap analysis
-- `python spark_cli.py improve` - Act on discovered gaps
+- `python spark_cli.py introspect` - Manual gap analysis
+- `python spark_cli.py improve` - Manual improvement
+
+Spark is now self-evolving. While the daemon runs, it:
+1. Processes events → extracts patterns → stores learnings
+2. Every 10 cycles: introspects → finds gaps → auto-improves
+3. Session start: injects known gaps so Claude can help address them
 
 Next priorities from docs/EVOLUTION.md:
 - Expand goal classification (reduce "unknown" type)

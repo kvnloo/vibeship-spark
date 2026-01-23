@@ -33,6 +33,7 @@ from lib.meta_learner import MetaLearner
 from lib.suggester import Suggester
 from lib.injection_tracker import InjectionTracker
 from lib.experiment_manager import ExperimentManager
+from lib.auto_improve import SparkAutoImprove
 
 
 # Configure logging
@@ -72,6 +73,10 @@ class SparkProcessor:
         self.traces_captured = 0
         self.injections_tracked = 0
         self.experiments_concluded = 0
+        # Self-improvement tracking
+        self.daemon_cycles = 0
+        self.introspection_interval = 10  # Run introspection every N cycles
+        self.last_improvement_count = 0
 
     async def initialize(self):
         """Initialize processor, load existing learnings."""
@@ -267,6 +272,38 @@ class SparkProcessor:
 
         return len(events)
 
+    async def run_introspection_cycle(self):
+        """
+        Run the self-improvement cycle: introspect -> improve.
+
+        This is the recursive loop that makes Spark truly self-evolving.
+        """
+        log.info("=== SELF-IMPROVEMENT CYCLE ===")
+
+        try:
+            improver = SparkAutoImprove(self.mind)
+            report = await improver.improve()
+
+            if report.gaps_found > 0:
+                log.info(f"Introspection found {report.gaps_found} gaps")
+                log.info(f"Auto-improve took {len(report.actions_taken)} actions")
+                log.info(f"Improvements made: {report.improvements_made}")
+
+                # Log specific actions
+                for action in report.actions_taken:
+                    status = "OK" if action.success else "FAIL"
+                    log.info(f"  [{status}] {action.gap_type}: {action.action_taken[:50]}")
+
+                self.last_improvement_count = report.improvements_made
+            else:
+                log.info("No gaps found - system is healthy")
+                self.last_improvement_count = 0
+
+        except Exception as e:
+            log.error(f"Self-improvement error: {e}")
+
+        log.info("=== END SELF-IMPROVEMENT ===")
+
     async def run_daemon(self, interval_seconds: float = 5.0):
         """
         Run as a daemon, processing queue periodically.
@@ -275,18 +312,25 @@ class SparkProcessor:
             interval_seconds: How often to check the queue
         """
         self.running = True
-        log.info(f"Daemon started (interval: {interval_seconds}s)")
+        log.info(f"Daemon started (interval: {interval_seconds}s, introspection every {self.introspection_interval} cycles)")
 
         while self.running:
             try:
                 await self.process_once()
+                self.daemon_cycles += 1
+
+                # Periodic self-improvement
+                if self.daemon_cycles % self.introspection_interval == 0:
+                    await self.run_introspection_cycle()
+
             except Exception as e:
                 log.error(f"Processing error: {e}")
 
             # Wait for next cycle
             await asyncio.sleep(interval_seconds)
 
-        log.info(f"Daemon stopped. Processed {self.processed_count} events, found {self.patterns_found} patterns")
+        log.info(f"Daemon stopped. Processed {self.processed_count} events, found {self.patterns_found} patterns, "
+                 f"ran {self.daemon_cycles // self.introspection_interval} introspection cycles")
 
     def stop(self):
         """Stop the daemon."""
@@ -422,6 +466,10 @@ Patterns extracted this session: {self.patterns_found}.
             "injection_follow_rate": self.injection_tracker.get_stats().follow_rate,
             "active_experiments": len(self.experiment_manager.get_active_experiments()),
             "experiments_concluded": self.experiments_concluded,
+            # Self-improvement status
+            "daemon_cycles": self.daemon_cycles,
+            "introspection_interval": self.introspection_interval,
+            "last_improvement_count": self.last_improvement_count,
         }
 
 
@@ -440,9 +488,16 @@ async def main():
         default=5.0,
         help="Daemon interval in seconds"
     )
+    parser.add_argument(
+        "--introspect-every",
+        type=int,
+        default=10,
+        help="Run self-improvement every N daemon cycles"
+    )
     args = parser.parse_args()
 
     processor = SparkProcessor()
+    processor.introspection_interval = args.introspect_every
     await processor.initialize()
 
     if args.mode == "daemon":
@@ -495,6 +550,10 @@ async def main():
         print(f"   Follow rate: {status['injection_follow_rate']:.0%}")
         print(f"   Active experiments: {status['active_experiments']}")
         print(f"   Experiments concluded: {status['experiments_concluded']}")
+        # Self-improvement status
+        print(f"   Daemon cycles: {status['daemon_cycles']}")
+        print(f"   Introspection every: {status['introspection_interval']} cycles")
+        print(f"   Last improvements: {status['last_improvement_count']}")
 
     # Cleanup
     await processor.mind.close()
