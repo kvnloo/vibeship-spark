@@ -27,6 +27,7 @@ from lib.queue import SparkQueue, EventType
 from lib.mind_client import MindClient, Memory, ContentType, TemporalLevel
 from lib.learner import SparkLearner
 from lib.skill_evolver import SkillEvolver
+from lib.orchestrator import AgentOrchestrator
 
 
 # Configure logging
@@ -50,10 +51,12 @@ class SparkProcessor:
         self.mind = MindClient()
         self.learner = SparkLearner(self.mind)
         self.skill_evolver = SkillEvolver(self.mind)
+        self.orchestrator = AgentOrchestrator(self.mind)
         self.running = False
         self.processed_count = 0
         self.patterns_found = 0
         self.skills_tracked = 0
+        self.agents_tracked = 0
 
     async def initialize(self):
         """Initialize processor, load existing learnings."""
@@ -64,7 +67,10 @@ class SparkProcessor:
             log.info("Connected to Vibeship Mind")
             await self.learner.load_existing_learnings()
             await self.skill_evolver.load_existing_data()
-            log.info(f"Loaded {len(self.learner.tool_weights)} tool weights, {len(self.skill_evolver.skill_stats)} skill stats")
+            await self.orchestrator.load_existing_data()
+            log.info(f"Loaded {len(self.learner.tool_weights)} tool weights, "
+                     f"{len(self.skill_evolver.skill_stats)} skill stats, "
+                     f"{len(self.orchestrator.agent_stats)} agent stats")
         else:
             log.warning("Mind not available - will retry on next cycle")
 
@@ -130,6 +136,31 @@ class SparkProcessor:
         if skill_rankings:
             log.info("Skill effectiveness: " + ", ".join(
                 f"{s}:{r:.0%}" for s, r, _ in skill_rankings[:3]
+            ))
+
+        # Process agent events
+        agent_usages = await self.orchestrator.process_events(events)
+        if agent_usages:
+            self.agents_tracked += len(agent_usages)
+            log.info(f"Tracked {len(agent_usages)} agent usages")
+
+            # Identify parallel patterns periodically
+            if self.agents_tracked >= 10:
+                parallel_patterns = self.orchestrator.identify_parallel_patterns()
+                if parallel_patterns:
+                    log.info(f"Identified {len(parallel_patterns)} parallel patterns")
+
+                # Store agent learnings
+                if await self.mind.is_available():
+                    stored = await self.orchestrator.store_learnings_in_mind()
+                    if stored:
+                        log.info(f"Stored {stored} agent learnings")
+
+        # Log agent effectiveness if available
+        agent_rankings = self.orchestrator.get_agent_ranking()
+        if agent_rankings:
+            log.info("Agent effectiveness: " + ", ".join(
+                f"{a}:{r:.0%}" for a, r, _ in agent_rankings[:3]
             ))
 
         return len(events)
@@ -243,12 +274,15 @@ Patterns extracted this session: {self.patterns_found}.
             "processed_count": self.processed_count,
             "patterns_found": self.patterns_found,
             "skills_tracked": self.skills_tracked,
+            "agents_tracked": self.agents_tracked,
             "mind_available": await self.mind.is_available(),
             "tool_weights": dict(self.learner.tool_weights),
             "skill_weights": dict(self.learner.skill_weights),
             "skill_stats": {k: v.success_rate for k, v in self.skill_evolver.skill_stats.items()},
             "skill_gaps": len(self.skill_evolver.gaps_identified),
             "skill_improvements": len(self.skill_evolver.improvements_proposed),
+            "agent_stats": {k: v.success_rate for k, v in self.orchestrator.agent_stats.items()},
+            "parallel_patterns": len(self.orchestrator.parallel_patterns),
         }
 
 
@@ -297,6 +331,7 @@ async def main():
         print(f"   Processed: {status['processed_count']}")
         print(f"   Patterns found: {status['patterns_found']}")
         print(f"   Skills tracked: {status['skills_tracked']}")
+        print(f"   Agents tracked: {status['agents_tracked']}")
         print(f"   Mind available: {status['mind_available']}")
         if status['tool_weights']:
             print(f"   Tool weights: {status['tool_weights']}")
@@ -306,6 +341,10 @@ async def main():
             print(f"   Skill gaps identified: {status['skill_gaps']}")
         if status['skill_improvements']:
             print(f"   Improvements proposed: {status['skill_improvements']}")
+        if status['agent_stats']:
+            print(f"   Agent effectiveness: {status['agent_stats']}")
+        if status['parallel_patterns']:
+            print(f"   Parallel patterns: {status['parallel_patterns']}")
 
     # Cleanup
     await processor.mind.close()
