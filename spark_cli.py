@@ -32,6 +32,9 @@ from lib.learning_transfer import LearningTransfer, LearningScope
 from lib.pattern_breeder import PatternBreeder, PopulationStats
 from lib.realtime_advisor import RealTimeAdvisor
 from lib.spark_mcp_server import SparkMCPServer
+from lib.spark_dashboard import SparkDashboard, DashboardView
+from lib.spark_debugger import SparkDebugger, DebugLevel
+from lib.spark_backup import SparkBackup, BackupType
 
 
 def print_banner():
@@ -179,8 +182,8 @@ def cmd_hooks():
 
 
 async def cmd_health():
-    """Comprehensive health check of all M1-M8 components."""
-    print("\n  M1-M8 Health Check")
+    """Comprehensive health check of all M1-M10 components."""
+    print("\n  M1-M10 Health Check")
     print("  " + "-" * 50)
 
     results = {}
@@ -426,6 +429,59 @@ async def cmd_health():
         print(f"       [FAIL] {e}")
         results["M8_SparkMCPServer"] = False
 
+    # M10: Spark Dashboard
+    print("\n  [M10] Spark Dashboard...")
+    try:
+        dashboard = SparkDashboard(mind_client=mind)
+        views = dashboard.get_available_views()
+        if len(views) >= 6:
+            print(f"       [OK] {len(views)} views available")
+            # Test refresh
+            await dashboard.refresh(DashboardView.OVERVIEW)
+            stats = dashboard.get_stats()
+            print(f"           Current view: {stats['current_view']}")
+            results["M10_SparkDashboard"] = True
+        else:
+            print(f"       [FAIL] Only {len(views)} views (expected 6+)")
+            results["M10_SparkDashboard"] = False
+    except Exception as e:
+        print(f"       [FAIL] {e}")
+        results["M10_SparkDashboard"] = False
+
+    # M10: Spark Debugger
+    print("\n  [M10] Spark Debugger...")
+    try:
+        debugger = SparkDebugger(level=DebugLevel.MINIMAL)
+        session = debugger.start_session("health_check")
+        if session and session.session_id == "health_check":
+            print(f"       [OK] Debug session started")
+            debugger.end_session("health_check")
+            stats = debugger.get_stats()
+            print(f"           Sessions in memory: {stats['sessions_in_memory']}")
+            results["M10_SparkDebugger"] = True
+        else:
+            print("       [FAIL] Could not start session")
+            results["M10_SparkDebugger"] = False
+    except Exception as e:
+        print(f"       [FAIL] {e}")
+        results["M10_SparkDebugger"] = False
+
+    # M10: Spark Backup
+    print("\n  [M10] Spark Backup...")
+    try:
+        backup = SparkBackup(mind_client=mind)
+        stats = backup.get_stats()
+        if "backup_count" in stats:
+            print(f"       [OK] Backup system ready")
+            print(f"           Backups: {stats['backup_count']}, Size: {stats['total_size_human']}")
+            results["M10_SparkBackup"] = True
+        else:
+            print("       [FAIL] Backup stats unavailable")
+            results["M10_SparkBackup"] = False
+    except Exception as e:
+        print(f"       [FAIL] {e}")
+        results["M10_SparkBackup"] = False
+
     # Summary
     print("\n  " + "=" * 50)
     passed = sum(1 for v in results.values() if v)
@@ -456,7 +512,7 @@ Commands:
   watch       Run daemon (continuous processing)
   clear       Clear the event queue
   hooks       Show hook installation status
-  health      Comprehensive M1-M8 health check
+  health      Comprehensive M1-M10 health check
         """
     )
 

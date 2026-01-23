@@ -162,6 +162,35 @@ class SparkQueue:
         except Exception:
             return 0
 
+    def peek(self, max_events: int = 100) -> list[SparkEvent]:
+        """
+        Peek at events without removing them.
+
+        Used for inspection/debugging.
+        """
+        events = []
+
+        if not self.queue_file.exists():
+            return events
+
+        try:
+            with open(self.queue_file, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
+
+            for line in lines[:max_events]:
+                line = line.strip()
+                if line:
+                    try:
+                        data = json.loads(line)
+                        events.append(SparkEvent.from_dict(data))
+                    except json.JSONDecodeError:
+                        continue
+
+        except Exception:
+            pass
+
+        return events
+
 
 # Singleton for fast access
 _queue: Optional[SparkQueue] = None
