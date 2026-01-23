@@ -30,6 +30,8 @@ from lib.intent_inferrer import infer_intent, predict_outcome
 PREDICTIONS_FILE = Path.home() / ".spark" / "predictions.json"
 # Active injections file (for feedback tracking)
 INJECTIONS_FILE = Path.home() / ".spark" / "active_injections.json"
+# Active goals file (for goal tracking)
+GOALS_FILE = Path.home() / ".spark" / "active_goals.json"
 
 
 def get_event_type(hook_event_name: str) -> EventType:
@@ -141,6 +143,181 @@ def resolve_prediction(session_id: str, tool_name: str, success: bool, error: st
             "was_correct": was_correct,
             "learning": learning
         }
+
+    except Exception:
+        return {}
+
+
+def capture_goal(session_id: str, user_prompt: str) -> dict:
+    """
+    Capture a user goal from their prompt.
+
+    This is the strategic layer - understanding WHAT the user wants to achieve.
+    """
+    try:
+        GOALS_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+        # Load existing goals
+        goals = {}
+        if GOALS_FILE.exists():
+            try:
+                goals = json.loads(GOALS_FILE.read_text())
+            except:
+                goals = {}
+
+        # Classify the goal
+        goal_type = _classify_goal(user_prompt)
+        description = user_prompt[:100].split('.')[0].strip()
+
+        goal_id = f"goal_{hash(f'{session_id}:{user_prompt[:50]}:{time.time()}') % 100000000:08x}"
+
+        goal = {
+            "goal_id": goal_id,
+            "session_id": session_id,
+            "created_at": time.time(),
+            "goal_type": goal_type,
+            "description": description,
+            "actions": [],
+            "status": "active"
+        }
+
+        # Mark any previous goal for this session as abandoned
+        for g_id, g in list(goals.items()):
+            if g.get("session_id") == session_id and g.get("status") == "active":
+                g["status"] = "abandoned"
+
+        goals[goal_id] = goal
+
+        # Keep only last 50 goals
+        if len(goals) > 50:
+            sorted_ids = sorted(goals.keys(), key=lambda k: goals[k].get("created_at", 0))
+            for old_id in sorted_ids[:-50]:
+                del goals[old_id]
+
+        GOALS_FILE.write_text(json.dumps(goals))
+
+        return {
+            "goal_captured": True,
+            "goal_id": goal_id,
+            "goal_type": goal_type
+        }
+
+    except Exception:
+        return {}
+
+
+def _classify_goal(prompt: str) -> str:
+    """Classify goal type from prompt."""
+    prompt_lower = prompt.lower()
+
+    DEBUG = ["fix", "bug", "error", "broken", "fail", "crash", "issue", "wrong", "debug"]
+    FEATURE = ["add", "create", "implement", "build", "new", "feature", "make"]
+    REFACTOR = ["refactor", "improve", "clean", "optimize", "simplify", "rename"]
+    EXPLORE = ["find", "search", "where", "what", "how", "understand", "look", "show"]
+    TEST = ["test", "spec", "coverage", "verify"]
+
+    scores = {
+        "debug": sum(1 for k in DEBUG if k in prompt_lower),
+        "feature": sum(1 for k in FEATURE if k in prompt_lower),
+        "refactor": sum(1 for k in REFACTOR if k in prompt_lower),
+        "explore": sum(1 for k in EXPLORE if k in prompt_lower),
+        "test": sum(1 for k in TEST if k in prompt_lower),
+    }
+
+    best = max(scores, key=scores.get)
+    return best if scores[best] > 0 else "unknown"
+
+
+def track_goal_progress(session_id: str, tool_name: str, success: bool) -> dict:
+    """
+    Track progress toward the current goal.
+
+    Returns progress info.
+    """
+    try:
+        if not GOALS_FILE.exists():
+            return {}
+
+        goals = json.loads(GOALS_FILE.read_text())
+
+        # Find active goal for this session
+        active_goal = None
+        for g_id, g in goals.items():
+            if g.get("session_id") == session_id and g.get("status") == "active":
+                active_goal = g
+                break
+
+        if not active_goal:
+            return {}
+
+        # Track action
+        active_goal["actions"].append({
+            "tool": tool_name,
+            "success": success,
+            "timestamp": time.time()
+        })
+
+        GOALS_FILE.write_text(json.dumps(goals))
+
+        return {
+            "goal_type": active_goal.get("goal_type"),
+            "actions_count": len(active_goal["actions"])
+        }
+
+    except Exception:
+        return {}
+
+
+def check_goal_completion(session_id: str, user_message: str) -> dict:
+    """
+    Check if user message signals goal completion.
+    """
+    try:
+        if not GOALS_FILE.exists():
+            return {}
+
+        goals = json.loads(GOALS_FILE.read_text())
+
+        # Find active goal
+        active_goal = None
+        goal_id = None
+        for g_id, g in goals.items():
+            if g.get("session_id") == session_id and g.get("status") == "active":
+                active_goal = g
+                goal_id = g_id
+                break
+
+        if not active_goal:
+            return {}
+
+        message_lower = user_message.lower()
+
+        # Completion signals
+        POSITIVE = ["thanks", "perfect", "great", "works", "done", "fixed", "awesome"]
+
+        if any(sig in message_lower for sig in POSITIVE):
+            active_goal["status"] = "completed"
+            active_goal["completed_at"] = time.time()
+            active_goal["success"] = True
+
+            # Calculate success score
+            duration = active_goal["completed_at"] - active_goal["created_at"]
+            actions = len(active_goal.get("actions", []))
+            score = 0.8 if duration < 300 else 0.6  # Bonus for quick
+
+            active_goal["success_score"] = score
+
+            GOALS_FILE.write_text(json.dumps(goals))
+
+            return {
+                "goal_completed": True,
+                "goal_type": active_goal.get("goal_type"),
+                "success_score": score,
+                "duration_sec": duration,
+                "actions_count": actions
+            }
+
+        return {}
 
     except Exception:
         return {}
@@ -293,6 +470,25 @@ def main():
         feedback = track_injection_feedback(session_id, tool_name, success)
         if feedback:
             data["advice_feedback"] = feedback
+
+        # GOALS: Track progress toward current goal
+        goal_progress = track_goal_progress(session_id, tool_name, success)
+        if goal_progress:
+            data["goal_progress"] = goal_progress
+
+    # GOALS: Capture goal from user prompt
+    if event_type == EventType.USER_PROMPT:
+        user_message = input_data.get("message", "")
+        if user_message:
+            # Capture new goal
+            goal_info = capture_goal(session_id, user_message)
+            if goal_info:
+                data["goal_captured"] = goal_info
+
+            # Also check if this completes a previous goal
+            completion = check_goal_completion(session_id, user_message)
+            if completion:
+                data["goal_completed"] = completion
 
     # Queue the event (fast file append)
     quick_capture(event_type, session_id, data, **kwargs)

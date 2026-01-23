@@ -427,7 +427,11 @@ class SparkLearner:
                     )
                     patterns.append(pattern)
 
-        # Pattern 5: Reasoning learnings (from prediction gaps)
+        # Pattern 5: Goal strategies (what works for what goal types)
+        goal_patterns = self._extract_goal_patterns()
+        patterns.extend(goal_patterns)
+
+        # Pattern 6: Reasoning learnings (from prediction gaps)
         if self.reasoning_learnings:
             # Deduplicate and count similar learnings
             learning_counts: Dict[str, int] = {}
@@ -455,6 +459,72 @@ class SparkLearner:
                         }
                     )
                     patterns.append(pattern)
+
+        return patterns
+
+    def _extract_goal_patterns(self) -> List[Pattern]:
+        """Extract patterns from completed goals."""
+        patterns = []
+
+        # Load goals from file
+        from pathlib import Path
+        goals_file = Path.home() / ".spark" / "active_goals.json"
+        if not goals_file.exists():
+            return patterns
+
+        try:
+            import json
+            goals = json.loads(goals_file.read_text())
+
+            # Group completed goals by type
+            by_type: Dict[str, List[dict]] = {}
+            for g_id, g in goals.items():
+                if g.get("status") == "completed" and g.get("goal_type"):
+                    goal_type = g["goal_type"]
+                    if goal_type not in by_type:
+                        by_type[goal_type] = []
+                    by_type[goal_type].append(g)
+
+            # Extract patterns for each goal type
+            for goal_type, completed_goals in by_type.items():
+                if len(completed_goals) >= 2:  # Need at least 2 goals
+                    # Calculate average success and tool sequences
+                    success_scores = [g.get("success_score", 0.5) for g in completed_goals]
+                    avg_success = sum(success_scores) / len(success_scores)
+
+                    # Find common tool sequences
+                    tool_sequences = []
+                    for g in completed_goals:
+                        actions = g.get("actions", [])
+                        seq = [a.get("tool") for a in actions if a.get("tool")]
+                        if seq:
+                            tool_sequences.append(tuple(seq[:5]))  # First 5 tools
+
+                    # Find most common sequence
+                    if tool_sequences:
+                        from collections import Counter
+                        seq_counts = Counter(tool_sequences)
+                        most_common_seq, count = seq_counts.most_common(1)[0]
+
+                        if count >= 2 and avg_success >= 0.6:
+                            seq_str = " -> ".join(most_common_seq)
+                            pattern = Pattern(
+                                pattern_type="goal_strategy",
+                                description=f"For {goal_type}: {seq_str} works ({avg_success:.0%} success)",
+                                conditions=[f"goal_type={goal_type}"],
+                                confidence=min(len(completed_goals) / 5, 1.0),
+                                sample_size=len(completed_goals),
+                                metadata={
+                                    "goal_type": goal_type,
+                                    "tool_sequence": list(most_common_seq),
+                                    "avg_success": avg_success,
+                                    "sample_size": len(completed_goals)
+                                }
+                            )
+                            patterns.append(pattern)
+
+        except Exception:
+            pass
 
         return patterns
 
