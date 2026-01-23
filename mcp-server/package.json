@@ -1,0 +1,30 @@
+{
+  "name": "@vibeship/spark-mcp",
+  "version": "0.1.0",
+  "description": "MCP server for Spark - Ambient Self-Evolving Intelligence",
+  "main": "dist/index.js",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "ts-node src/index.ts",
+    "watch": "tsc --watch"
+  },
+  "keywords": [
+    "mcp",
+    "spark",
+    "vibeship",
+    "self-improving",
+    "ai"
+  ],
+  "author": "Vibeship",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.5.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "ts-node": "^10.9.0"
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "$schema": "https://claude.ai/claude-code/hooks-schema.json",
+  "description": "Spark: Ambient Self-Evolving Intelligence hooks",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Users/USER/Desktop/vibeship-spark/hooks/session_start.py\"",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Users/USER/Desktop/vibeship-spark/hooks/observe.py\"",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Users/USER/Desktop/vibeship-spark/hooks/observe.py\"",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Users/USER/Desktop/vibeship-spark/hooks/observe.py\"",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Users/USER/Desktop/vibeship-spark/hooks/observe.py\"",
+            "timeout": 1
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python \"C:/Users/USER/Desktop/vibeship-spark/hooks/session_end.py\"",
+            "timeout": 2
+          }
+        ]
+      }
+    ]
+  }
+}

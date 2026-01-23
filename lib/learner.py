@@ -1,0 +1,327 @@
+"""
+Spark Learner: Pattern extraction and self-improvement engine.
+
+This is where the magic happens. The learner:
+1. Analyzes batches of events
+2. Extracts patterns (what works, what fails)
+3. Stores learnings in Mind
+4. Updates Spark's behavior weights
+
+All operations are async and run in background.
+"""
+
+import asyncio
+import json
+from collections import defaultdict
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Tuple
+from pathlib import Path
+
+from .queue import SparkEvent, EventType
+from .mind_client import (
+    MindClient, Memory, ContentType, TemporalLevel,
+    store_learning, retrieve_learnings
+)
+
+
+@dataclass
+class Pattern:
+    """A learned pattern."""
+    pattern_type: str  # tool_effectiveness, error_avoidance, skill_preference, etc.
+    description: str
+    conditions: List[str]  # When this pattern applies
+    confidence: float  # 0.0 to 1.0
+    sample_size: int
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class ToolStats:
+    """Statistics for a tool."""
+    name: str
+    total_calls: int = 0
+    successes: int = 0
+    failures: int = 0
+    total_duration_ms: float = 0.0
+    error_types: Dict[str, int] = field(default_factory=dict)
+
+    @property
+    def success_rate(self) -> float:
+        if self.total_calls == 0:
+            return 0.0
+        return self.successes / self.total_calls
+
+    @property
+    def avg_duration_ms(self) -> float:
+        if self.total_calls == 0:
+            return 0.0
+        return self.total_duration_ms / self.total_calls
+
+
+class SparkLearner:
+    """
+    The learning engine of Spark.
+
+    Processes events, extracts patterns, stores learnings.
+    """
+
+    def __init__(self, mind_client: Optional[MindClient] = None):
+        self.mind = mind_client or MindClient()
+        self.tool_stats: Dict[str, ToolStats] = defaultdict(lambda: ToolStats(name="unknown"))
+        self.session_events: List[SparkEvent] = []
+        self.patterns_found: List[Pattern] = []
+
+        # Behavior weights (loaded from Mind, updated by learnings)
+        self.tool_weights: Dict[str, float] = {}  # tool -> preference weight
+        self.skill_weights: Dict[str, float] = {}  # skill -> effectiveness weight
+        self.agent_weights: Dict[str, float] = {}  # agent_type -> effectiveness weight
+
+    async def load_existing_learnings(self):
+        """Load existing learnings from Mind to initialize weights."""
+        # Load tool effectiveness learnings
+        tool_learnings = await self.mind.retrieve(
+            query="tool effectiveness",
+            limit=50,
+            temporal_level=TemporalLevel.IDENTITY,
+            content_type=ContentType.REFLECTION
+        )
+
+        for learning in tool_learnings:
+            metadata = learning.get("metadata", {})
+            if "tool" in metadata and "success_rate" in metadata:
+                self.tool_weights[metadata["tool"]] = metadata["success_rate"]
+
+        # Load skill effectiveness learnings
+        skill_learnings = await self.mind.retrieve(
+            query="skill effectiveness",
+            limit=50,
+            temporal_level=TemporalLevel.IDENTITY,
+            content_type=ContentType.REFLECTION
+        )
+
+        for learning in skill_learnings:
+            metadata = learning.get("metadata", {})
+            if "skill" in metadata and "success_rate" in metadata:
+                self.skill_weights[metadata["skill"]] = metadata["success_rate"]
+
+    async def process_events(self, events: List[SparkEvent]) -> List[Pattern]:
+        """
+        Process a batch of events and extract patterns.
+
+        This is the main entry point for the background processor.
+        """
+        self.session_events.extend(events)
+        patterns = []
+
+        # Update tool statistics
+        for event in events:
+            if event.event_type == EventType.POST_TOOL:
+                self._update_tool_stats(event, success=True)
+            elif event.event_type == EventType.POST_TOOL_FAILURE:
+                self._update_tool_stats(event, success=False)
+
+        # Extract patterns when we have enough data
+        if len(self.session_events) >= 10:
+            patterns = await self._extract_patterns()
+            self.patterns_found.extend(patterns)
+
+        return patterns
+
+    def _update_tool_stats(self, event: SparkEvent, success: bool):
+        """Update statistics for a tool."""
+        tool_name = event.tool_name or "unknown"
+        stats = self.tool_stats[tool_name]
+        stats.name = tool_name
+        stats.total_calls += 1
+
+        if success:
+            stats.successes += 1
+        else:
+            stats.failures += 1
+            error = event.error or "unknown"
+            error_type = self._categorize_error(error)
+            stats.error_types[error_type] = stats.error_types.get(error_type, 0) + 1
+
+        if event.duration_ms:
+            stats.total_duration_ms += event.duration_ms
+
+    def _categorize_error(self, error: str) -> str:
+        """Categorize an error message into a type."""
+        error_lower = error.lower()
+
+        if "not found" in error_lower or "no such file" in error_lower:
+            return "file_not_found"
+        elif "permission" in error_lower:
+            return "permission_denied"
+        elif "timeout" in error_lower:
+            return "timeout"
+        elif "not unique" in error_lower or "old_string" in error_lower:
+            return "edit_not_unique"
+        elif "syntax" in error_lower:
+            return "syntax_error"
+        else:
+            return "other"
+
+    async def _extract_patterns(self) -> List[Pattern]:
+        """Extract patterns from accumulated events."""
+        patterns = []
+
+        # Pattern 1: Tool effectiveness
+        for tool_name, stats in self.tool_stats.items():
+            if stats.total_calls >= 5:  # Need minimum samples
+                pattern = Pattern(
+                    pattern_type="tool_effectiveness",
+                    description=f"{tool_name} has {stats.success_rate:.0%} success rate",
+                    conditions=[f"tool={tool_name}"],
+                    confidence=min(stats.total_calls / 20, 1.0),  # More samples = more confidence
+                    sample_size=stats.total_calls,
+                    metadata={
+                        "tool": tool_name,
+                        "success_rate": stats.success_rate,
+                        "avg_duration_ms": stats.avg_duration_ms,
+                        "error_types": dict(stats.error_types)
+                    }
+                )
+                patterns.append(pattern)
+
+        # Pattern 2: Error avoidance patterns
+        for tool_name, stats in self.tool_stats.items():
+            for error_type, count in stats.error_types.items():
+                if count >= 3:  # Recurring error
+                    avoidance = self._get_error_avoidance(tool_name, error_type)
+                    if avoidance:
+                        pattern = Pattern(
+                            pattern_type="error_avoidance",
+                            description=f"To avoid {error_type} with {tool_name}: {avoidance}",
+                            conditions=[f"tool={tool_name}", f"error_type={error_type}"],
+                            confidence=min(count / 10, 1.0),
+                            sample_size=count,
+                            metadata={
+                                "tool": tool_name,
+                                "error_type": error_type,
+                                "avoidance_strategy": avoidance
+                            }
+                        )
+                        patterns.append(pattern)
+
+        # Pattern 3: Tool sequences that work well
+        sequences = self._find_successful_sequences()
+        for seq, success_rate, count in sequences:
+            if success_rate > 0.8 and count >= 3:
+                pattern = Pattern(
+                    pattern_type="tool_sequence",
+                    description=f"Sequence {' -> '.join(seq)} has {success_rate:.0%} success",
+                    conditions=[f"sequence={seq}"],
+                    confidence=min(count / 10, 1.0),
+                    sample_size=count,
+                    metadata={
+                        "sequence": seq,
+                        "success_rate": success_rate
+                    }
+                )
+                patterns.append(pattern)
+
+        return patterns
+
+    def _get_error_avoidance(self, tool: str, error_type: str) -> Optional[str]:
+        """Get avoidance strategy for a tool/error combination."""
+        strategies = {
+            ("Edit", "edit_not_unique"): "Include more surrounding context in old_string to make it unique",
+            ("Edit", "file_not_found"): "Always Read the file first to verify it exists",
+            ("Bash", "permission_denied"): "Check file permissions before executing",
+            ("Write", "file_not_found"): "Create parent directories first with mkdir -p",
+            ("Grep", "timeout"): "Use more specific patterns or limit search scope",
+        }
+        return strategies.get((tool, error_type))
+
+    def _find_successful_sequences(self) -> List[Tuple[List[str], float, int]]:
+        """Find tool sequences that work well together."""
+        # Group events by session
+        sessions: Dict[str, List[SparkEvent]] = defaultdict(list)
+        for event in self.session_events:
+            sessions[event.session_id].append(event)
+
+        # Find sequences of 2-3 tools
+        sequences: Dict[tuple, List[bool]] = defaultdict(list)
+
+        for session_events in sessions.values():
+            tool_events = [
+                e for e in session_events
+                if e.event_type in (EventType.POST_TOOL, EventType.POST_TOOL_FAILURE)
+            ]
+
+            for i in range(len(tool_events) - 1):
+                # 2-tool sequences
+                seq = (tool_events[i].tool_name, tool_events[i+1].tool_name)
+                success = tool_events[i+1].event_type == EventType.POST_TOOL
+                sequences[seq].append(success)
+
+                # 3-tool sequences
+                if i < len(tool_events) - 2:
+                    seq3 = (
+                        tool_events[i].tool_name,
+                        tool_events[i+1].tool_name,
+                        tool_events[i+2].tool_name
+                    )
+                    success3 = tool_events[i+2].event_type == EventType.POST_TOOL
+                    sequences[seq3].append(success3)
+
+        # Calculate success rates
+        results = []
+        for seq, outcomes in sequences.items():
+            if len(outcomes) >= 3:
+                success_rate = sum(outcomes) / len(outcomes)
+                results.append((list(seq), success_rate, len(outcomes)))
+
+        return results
+
+    async def store_patterns_in_mind(self, patterns: List[Pattern]):
+        """Store extracted patterns in Mind as learnings."""
+        memories = []
+
+        for pattern in patterns:
+            if pattern.confidence >= 0.7:  # Only store high-confidence patterns
+                memory = Memory(
+                    content=f"LEARNING [{pattern.pattern_type.upper()}]: {pattern.description}. "
+                           f"Conditions: {', '.join(pattern.conditions)}. "
+                           f"Confidence: {pattern.confidence:.0%} ({pattern.sample_size} samples)",
+                    temporal_level=TemporalLevel.IDENTITY,
+                    salience=pattern.confidence,
+                    content_type=ContentType.REFLECTION,
+                    metadata=pattern.metadata
+                )
+                memories.append(memory)
+
+        if memories:
+            stored = await self.mind.store_batch(memories)
+            return stored
+        return 0
+
+    async def get_recommendation(self, tool_name: str, context: Dict[str, Any]) -> Optional[str]:
+        """Get a recommendation for using a tool based on learnings."""
+        # Query Mind for relevant learnings
+        learnings = await self.mind.retrieve(
+            query=f"{tool_name} usage recommendations",
+            limit=5,
+            temporal_level=TemporalLevel.IDENTITY
+        )
+
+        if learnings:
+            # Return the most relevant recommendation
+            return learnings[0].get("content")
+        return None
+
+    def get_tool_ranking(self) -> List[Tuple[str, float]]:
+        """Get tools ranked by effectiveness."""
+        rankings = []
+        for tool_name, stats in self.tool_stats.items():
+            if stats.total_calls >= 3:
+                rankings.append((tool_name, stats.success_rate))
+
+        rankings.sort(key=lambda x: x[1], reverse=True)
+        return rankings
+
+    def clear_session_data(self):
+        """Clear session-specific data after processing."""
+        self.session_events = []
+        self.tool_stats.clear()
