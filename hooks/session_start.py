@@ -33,6 +33,83 @@ SPARK_DIR = Path.home() / ".spark"
 PID_FILE = SPARK_DIR / "daemon.pid"
 INJECTIONS_FILE = SPARK_DIR / "active_injections.json"
 
+# Self-awareness files (defined after SPARK_DIR)
+IMPROVEMENT_LOG = SPARK_DIR / "improvement_log.json"
+GOALS_FILE = SPARK_DIR / "active_goals.json"
+
+
+def load_self_awareness() -> Optional[str]:
+    """
+    Load self-awareness data for injection.
+
+    This tells Claude what Spark is struggling with so it can
+    help address those gaps during the session.
+
+    Must be FAST (<50ms) - just file reads, no Mind calls.
+    """
+    awareness_parts = []
+
+    try:
+        # 1. Recent improvement actions
+        if IMPROVEMENT_LOG.exists():
+            try:
+                log = json.loads(IMPROVEMENT_LOG.read_text())
+                if log:
+                    # Get most recent improvement report
+                    recent = log[-1]
+                    gaps = recent.get("gaps_found", 0)
+                    improvements = recent.get("improvements_made", 0)
+
+                    if gaps > 0:
+                        # Get high-severity gaps from actions
+                        actions = recent.get("actions_taken", [])
+                        high_gaps = [a for a in actions if a.get("gap_type") in ("blind_spot", "missing_pattern")]
+
+                        if high_gaps:
+                            gap_summaries = [a.get("description", "")[:60] for a in high_gaps[:2]]
+                            awareness_parts.append(
+                                f"[SPARK SELF-AWARENESS] Recent gaps identified ({gaps} total, {improvements} addressed):\n" +
+                                "\n".join(f"  - {g}" for g in gap_summaries if g)
+                            )
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+        # 2. Goal success patterns
+        if GOALS_FILE.exists():
+            try:
+                goals = json.loads(GOALS_FILE.read_text())
+                if goals:
+                    from collections import defaultdict
+                    by_type = defaultdict(lambda: {"completed": 0, "abandoned": 0, "total": 0})
+
+                    for g in goals.values():
+                        gtype = g.get("goal_type", "unknown")
+                        status = g.get("status", "")
+                        by_type[gtype]["total"] += 1
+                        if status == "completed":
+                            by_type[gtype]["completed"] += 1
+                        elif status == "abandoned":
+                            by_type[gtype]["abandoned"] += 1
+
+                    # Find struggling goal types (more abandoned than completed)
+                    struggling = []
+                    for gtype, stats in by_type.items():
+                        if stats["total"] >= 3 and stats["abandoned"] > stats["completed"]:
+                            rate = stats["completed"] / stats["total"] if stats["total"] > 0 else 0
+                            struggling.append(f"{gtype} ({rate:.0%} success)")
+
+                    if struggling:
+                        awareness_parts.append(
+                            f"[SPARK SELF-AWARENESS] Goal types that need attention: {', '.join(struggling[:3])}"
+                        )
+            except (json.JSONDecodeError, KeyError):
+                pass
+
+    except Exception:
+        pass  # Never fail the hook
+
+    return "\n".join(awareness_parts) if awareness_parts else None
+
 
 def is_daemon_running() -> bool:
     """Check if processor daemon is already running."""
@@ -170,7 +247,7 @@ async def load_and_inject(project_name: Optional[str], session_id: Optional[str]
         # Get proactive warnings
         warnings = suggester.get_relevant_suggestions(max_suggestions=2, min_confidence=0.7)
 
-        # Combine context and warnings
+        # Combine context, warnings, and self-awareness
         parts = []
         if context:
             parts.append(context)
@@ -179,6 +256,11 @@ async def load_and_inject(project_name: Optional[str], session_id: Optional[str]
             warning_text = suggester.format_suggestions_for_display(warnings, compact=True)
             if warning_text:
                 parts.append(warning_text)
+
+        # Add self-awareness (what Spark is struggling with)
+        self_awareness = load_self_awareness()
+        if self_awareness:
+            parts.append(self_awareness)
 
         # FEEDBACK LOOP: Save active injections for observe hook to track
         if session_id and tracker.active_injections:

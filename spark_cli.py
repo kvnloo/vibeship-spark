@@ -41,6 +41,7 @@ from lib.spark_debugger import SparkDebugger, DebugLevel
 from lib.spark_backup import SparkBackup, BackupType
 from lib.witness import SparkWitness
 from lib.introspect import introspect as run_introspect
+from lib.auto_improve import auto_improve as run_auto_improve
 
 
 def print_banner():
@@ -196,6 +197,12 @@ def cmd_witness(verbose: bool = False):
 async def cmd_introspect():
     """Self-analysis - what am I not learning?"""
     result = await run_introspect()
+    print(result)
+
+
+async def cmd_improve():
+    """Auto-improve - act on self-discovered gaps."""
+    result = await run_auto_improve()
     print(result)
 
 
@@ -692,6 +699,7 @@ Commands:
   status      Show current Spark status
   witness     Unified view of what's happening (recommended)
   introspect  Self-analysis - what am I not learning?
+  improve     Auto-improve - act on self-discovered gaps
   learn       Process pending events now
   reflect     Run deep reflection on learnings
   learnings   Show what Spark has learned
@@ -703,7 +711,7 @@ Commands:
     )
 
     parser.add_argument("command", nargs="?", default="status",
-                       choices=["status", "witness", "introspect", "learn", "reflect", "learnings",
+                       choices=["status", "witness", "introspect", "improve", "learn", "reflect", "learnings",
                                "watch", "clear", "hooks", "health"],
                        help="Command to run")
     parser.add_argument("--interval", type=int, default=15,
@@ -721,6 +729,8 @@ Commands:
         cmd_witness(verbose=args.verbose)
     elif args.command == "introspect":
         asyncio.run(cmd_introspect())
+    elif args.command == "improve":
+        asyncio.run(cmd_improve())
     elif args.command == "learn":
         asyncio.run(cmd_learn())
     elif args.command == "reflect":

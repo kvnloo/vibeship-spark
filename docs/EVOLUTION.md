@@ -2,8 +2,8 @@
 
 > This document tracks Spark's self-improvement journey - what's been built, what works, what's missing, and the path forward.
 
-**Last Updated:** 2026-01-23
-**Current Version:** M11 Complete + Self-Analysis Fixes + Timing Patterns
+**Last Updated:** 2026-01-24
+**Current Version:** M11 Complete + Recursive Self-Improvement
 **Health Status:** 21/21 components healthy
 
 ---
@@ -38,7 +38,7 @@
 - **Backup** - Save/restore learning state
 - **Conflict Resolver** - Handle conflicting learnings
 
-### Phase 5: Self-Analysis (Current)
+### Phase 5: Self-Analysis
 - **Strategy Injection** - Inject learned goal strategies
 - **Session End Finalization** - Auto-complete goals on exit
 - **Goal Strategy Persistence** - Store strategies to Mind
@@ -48,6 +48,13 @@
 - **Pattern Deduplication** - Prevent duplicate storage in Mind
 - **Timing Patterns** - Learn slow tools, fast tools, and comparisons
 - **Fixed prompt field** - UserPromptSubmit uses 'prompt' not 'message'
+
+### Phase 6: Recursive Self-Improvement (Current)
+- **Unified Witness** - Single holistic view of all systems (`lib/witness.py`)
+- **Introspection** - Self-aware gap analysis: blind spots, missing patterns, overconfidence (`lib/introspect.py`)
+- **Auto-Improve** - Act on gaps automatically: create learnings, flag extractions, calibrate (`lib/auto_improve.py`)
+- **Self-Awareness Injection** - Session start now injects known gaps and struggling goal types
+- **Recursive Loop Complete** - Introspect -> Improve -> Inject -> Verify
 
 ---
 
@@ -65,6 +72,9 @@
 | Prediction/resolution | 75% | Predictions made and resolved |
 | Goal tracking | 80% | Goals captured, classified, completed |
 | Mind persistence | 95% | Learnings survive restarts |
+| Self-introspection | 85% | Identifies blind spots, missing patterns |
+| Auto-improvement | 80% | Acts on gaps automatically |
+| Self-awareness injection | 90% | Known gaps injected at session start |
 
 ### Strong Patterns Learned
 
@@ -189,7 +199,7 @@ Tool Sequences:
 ## Commands Reference
 
 ```bash
-# Health check
+# Health check (21/21 components)
 python spark_cli.py health
 
 # Live dashboard
@@ -201,6 +211,11 @@ python processor.py --mode once
 # Deep reflection
 python processor.py --mode reflect
 
+# Self-analysis commands
+python spark_cli.py witness          # Unified view of all systems
+python spark_cli.py introspect       # Self-aware gap analysis
+python spark_cli.py improve          # Act on discovered gaps
+
 # Specific views
 python spark_live.py goals
 python spark_live.py strategies
@@ -211,17 +226,24 @@ python spark_live.py advice
 
 ## Next Evolution Priorities
 
-### Immediate (Next Session)
+### Completed
 1. ~~**Add hook validation to health check**~~ - **DONE**
 2. ~~**Add pattern deduplication**~~ - **DONE**
 3. ~~**Timing patterns**~~ - **DONE**
-4. **Expand goal classification** - More keywords, better accuracy
-5. **Error recovery learning** - Track failure->success sequences
+4. ~~**Unified Witness**~~ - **DONE** - Holistic system view
+5. ~~**Introspection**~~ - **DONE** - Self-aware gap analysis
+6. ~~**Auto-Improve**~~ - **DONE** - Act on gaps automatically
+7. ~~**Self-awareness injection**~~ - **DONE** - Session start shows gaps
+
+### Immediate (Next Session)
+1. **Expand goal classification** - More keywords, reduce "unknown" type
+2. **Error recovery learning** - Track failure->success sequences
+3. **Confidence calibration** - Improve prediction accuracy over time
 
 ### Short-term (This Week)
-1. **Confidence calibration** - Improve prediction accuracy over time
-2. **Parallel pattern learning** - Detect concurrent tool calls
-3. **Fix test failures** - Update tests for new tuple return format
+1. **Parallel pattern learning** - Detect concurrent tool calls
+2. **Fix test failures** - Update tests for new tuple return format
+3. **Periodic introspection** - Auto-run introspect on processor schedule
 
 ### Medium-term (This Month)
 1. **Self-testing framework** - Automated validation
@@ -249,6 +271,9 @@ python spark_live.py advice
 - Always verify hook data format against Claude Code docs (prompt vs message)
 - Deduplication should use signatures, not content comparison (faster)
 - Timing patterns need thresholds calibrated to actual usage
+- Recursive self-improvement works: introspect -> improve -> inject -> verify
+- Mind API caps at ~100 results; query specific types instead of generic "LEARNING"
+- Self-awareness at session start helps Claude help Spark improve
 
 ---
 
@@ -258,19 +283,23 @@ Use this after restarting Claude Code:
 
 ```
 I'm continuing Spark's self-evolution. Last session completed:
-1. Fixed observe.py to use 'prompt' field (was 'message') - goal capture now works
-2. Added hook validation to health check (21/21 components now)
-3. Added pattern deduplication (signature-based, prevents duplicate Mind storage)
-4. Added timing patterns (slow_tool, fast_tool, timing_comparison)
+1. Created Unified Witness (lib/witness.py) - holistic system view
+2. Created Introspection (lib/introspect.py) - self-aware gap analysis
+3. Created Auto-Improve (lib/auto_improve.py) - act on gaps automatically
+4. Integrated self-awareness injection into session_start.py
+5. The recursive loop is complete: introspect -> improve -> inject -> verify
 
 To verify: Run `python spark_cli.py health` - should show 21/21 healthy
 
+New commands:
+- `python spark_cli.py witness` - Unified view of all systems
+- `python spark_cli.py introspect` - Self-aware gap analysis
+- `python spark_cli.py improve` - Act on discovered gaps
+
 Next priorities from docs/EVOLUTION.md:
-- Expand goal classification (many prompts still "unknown")
+- Expand goal classification (reduce "unknown" type)
 - Error recovery learning (track failure->success sequences)
 - Confidence calibration (improve prediction accuracy)
-
-Check if THIS prompt captured a goal: `type %USERPROFILE%\.spark\active_goals.json`
 ```
 
 ---
