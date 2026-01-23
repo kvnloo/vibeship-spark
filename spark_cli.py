@@ -742,6 +742,7 @@ Commands:
   status      Show current Spark status
   witness     Unified view of what's happening (recommended)
   live        Live monitoring mode - continuous witness updates
+  report      Generate learning intelligence report
   introspect  Self-analysis - what am I not learning?
   improve     Auto-improve - act on self-discovered gaps
   learn       Process pending events now
@@ -755,7 +756,7 @@ Commands:
     )
 
     parser.add_argument("command", nargs="?", default="status",
-                       choices=["status", "witness", "live", "introspect", "improve", "calibration", "learn", "reflect", "learnings",
+                       choices=["status", "witness", "live", "report", "introspect", "improve", "calibration", "learn", "reflect", "learnings",
                                "watch", "clear", "hooks", "health"],
                        help="Command to run")
     parser.add_argument("--interval", type=int, default=5,
@@ -764,6 +765,9 @@ Commands:
                        help="Verbose output (for witness/live command)")
     parser.add_argument("--live", action="store_true",
                        help="Enable live mode for witness command")
+    parser.add_argument("-o", "--output", help="Output file for report command")
+    parser.add_argument("--detailed", action="store_true",
+                       help="Include detailed learnings in report")
 
     args = parser.parse_args()
 
@@ -781,6 +785,20 @@ Commands:
     elif args.command == "live":
         from lib.witness import watch
         watch(interval=args.interval, verbose=args.verbose)
+    elif args.command == "report":
+        from spark_report import SparkReportGenerator
+        async def run_report():
+            gen = SparkReportGenerator()
+            await gen.gather_data()
+            gen.analyze_patterns()
+            report = gen.generate_report(detailed=args.detailed)
+            if args.output:
+                Path(args.output).write_text(report)
+                print(f"Report saved to: {args.output}")
+            else:
+                print(report)
+            await gen.close()
+        asyncio.run(run_report())
     elif args.command == "introspect":
         asyncio.run(cmd_introspect())
     elif args.command == "improve":
