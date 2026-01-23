@@ -174,7 +174,7 @@ class SparkEvent:
 
 ### 5. Processor (processor.py)
 
-**Purpose**: Background learning orchestration
+**Purpose**: Background learning orchestration with self-improvement
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -194,7 +194,9 @@ class SparkEvent:
 │   3. Update tool statistics                                     │
 │   4. Extract patterns when threshold met                        │
 │   5. Store high-confidence patterns in Mind                     │
-│   6. Repeat (daemon) or exit (once)                            │
+│   6. Run introspection every N cycles (daemon mode)            │
+│   7. Auto-improve based on discovered gaps                      │
+│   8. Repeat (daemon) or exit (once)                            │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -243,7 +245,7 @@ Queue (events.jsonl)
     └──▶ Store in Mind (if confidence > 0.7)
 ```
 
-### Context Injection Flow (TODO)
+### Context Injection Flow
 
 ```
 Session Start
@@ -253,11 +255,13 @@ Session Start
 │ session_start.py  │
 └───────────────────┘
     │
-    ▼
-Query Mind for relevant learnings
+    ├──▶ ContextInjector: Query relevant learnings
     │
-    ▼
-Inject as additionalContext
+    ├──▶ Suggester: Generate proactive suggestions
+    │
+    ├──▶ InjectionTracker: Track what was injected
+    │
+    └──▶ Self-Awareness: Inject known gaps/struggling areas
     │
     ▼
 Claude sees learnings at start
@@ -267,39 +271,78 @@ Claude sees learnings at start
 
 ```
 vibeship-spark/
-├── lib/
-│   ├── __init__.py         # Package exports
-│   ├── queue.py            # SparkQueue, SparkEvent, quick_capture()
-│   ├── mind_client.py      # MindClient, Memory, async operations
-│   └── learner.py          # SparkLearner, Pattern, ToolStats
+├── lib/                              # 27 Core modules (~19,500 LOC)
+│   ├── __init__.py                   # Package exports
+│   │
+│   │   # Tier 1: Core Infrastructure
+│   ├── queue.py                      # SparkQueue, SparkEvent, quick_capture()
+│   ├── mind_client.py                # MindClient, Memory, retrieve_all() pagination
+│   ├── learner.py                    # SparkLearner, Pattern, ToolStats, parallel patterns
+│   │
+│   │   # Tier 2: Active Learning
+│   ├── prompt_evolver.py             # Trace capture & reflection
+│   ├── meta_learner.py               # Learning about learning
+│   ├── suggester.py                  # Proactive suggestions
+│   ├── skill_evolver.py              # Skill effectiveness tracking
+│   ├── orchestrator.py               # Agent effectiveness tracking
+│   ├── injection_tracker.py          # Track if advice followed
+│   ├── experiment_manager.py         # A/B testing
+│   ├── reasoning_tracker.py          # Confidence calibration
+│   │
+│   │   # Tier 3: Self-Improvement
+│   ├── introspect.py                 # Self-aware gap analysis
+│   ├── auto_improve.py               # Act on gaps automatically
+│   ├── witness.py                    # Unified system view
+│   ├── context_injector.py           # Inject learnings at session start
+│   │
+│   │   # Tier 4: CLI/Dashboard
+│   ├── spark_dashboard.py            # Terminal UI (8 views)
+│   ├── spark_debugger.py             # Debug sessions
+│   ├── spark_backup.py               # Backup/restore with pagination
+│   ├── conflict_resolver.py          # Resolve conflicting learnings
+│   │
+│   │   # Tier 5: Support Modules
+│   ├── goal_classifier.py            # Shared goal classification
+│   ├── goal_tracker.py               # Goal lifecycle tracking
+│   ├── intent_inferrer.py            # Intent prediction
+│   ├── realtime_advisor.py           # Real-time warnings
+│   ├── pattern_breeder.py            # Genetic evolution
+│   ├── project_analyzer.py           # Project fingerprinting
+│   └── learning_transfer.py          # Cross-project sharing
 │
-├── hooks/
-│   ├── observe.py          # Main observation hook (all tool events)
-│   ├── session_start.py    # Context injection at session start
-│   └── session_end.py      # Trigger processor at session end
+├── hooks/                            # Claude Code hooks
+│   ├── observe.py                    # Capture tool events + pre-tool warnings
+│   ├── session_start.py              # Load context + self-awareness injection
+│   └── session_end.py                # Trigger processor + goal finalization
 │
-├── mcp-server/             # MCP server (TODO)
+├── mcp-server/                       # Node.js MCP server (built)
 │   ├── src/
-│   │   └── index.ts        # MCP tool definitions
+│   │   └── index.ts                  # 7 MCP tools
 │   └── package.json
 │
-├── tests/                  # Unit tests (TODO)
-│   ├── test_queue.py
-│   ├── test_learner.py
-│   ├── test_mind_client.py
-│   └── test_integration.py
+├── tests/                            # 925 tests (21 test files)
+│   ├── conftest.py                   # Shared fixtures
+│   ├── test_queue.py                 # Queue operations
+│   ├── test_mind_client.py           # Mind integration
+│   ├── test_learner.py               # Pattern extraction + parallel patterns
+│   ├── test_goal_classifier.py       # 134 classification tests
+│   ├── test_*.py                     # ... 16 more test files
+│   └── integration/                  # E2E, chaos, performance tests
 │
-├── docs/
-│   ├── PRD.md              # Product requirements
-│   ├── ARCHITECTURE.md     # This file
-│   ├── IMPLEMENTATION.md   # Implementation status
-│   └── TESTING.md          # Test strategy
+├── docs/                             # Documentation
+│   ├── PRD.md                        # Product requirements
+│   ├── ARCHITECTURE.md               # This file
+│   ├── ARCHITECTURE_AUDIT.md         # Module audit
+│   ├── IMPLEMENTATION.md             # M1-M11 status
+│   ├── EVOLUTION.md                  # Self-improvement journey
+│   ├── FLOW.md                       # Data flow diagrams
+│   └── TESTING.md                    # Test strategy
 │
-├── processor.py            # Background learning processor
-├── setup.py                # Installation and management
-├── spark-hooks.json        # Hook configuration template
-├── CLAUDE.md               # Instructions for Claude Code
-└── README.md               # User documentation
+├── processor.py                      # Background processor + daemon
+├── spark_cli.py                      # CLI interface
+├── setup.py                          # Installation
+├── CLAUDE.md                         # Instructions for Claude Code
+└── README.md                         # User documentation
 ```
 
 ## Integration Points
@@ -348,3 +391,14 @@ Configuration in `~/.claude/settings.json`:
 | Queue write | < 10ms | ~5ms |
 | Mind store | < 100ms | ~50ms |
 | Batch processing | Background | N/A |
+
+## Current Status
+
+| Metric | Value |
+|--------|-------|
+| Components | 21 healthy |
+| Tests | 925 passing |
+| Modules | 27 Python files |
+| Lines of Code | ~19,500 |
+
+**Last Updated:** 2026-01-24

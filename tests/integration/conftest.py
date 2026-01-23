@@ -97,6 +97,10 @@ class MockMindClient:
                     break
         return results
 
+    async def retrieve_all(self, query: str, max_results: int = 1000, **kwargs) -> List[dict]:
+        """Pagination-aware retrieval (same as retrieve for mock)."""
+        return await self.retrieve(query, limit=max_results, **kwargs)
+
     async def close(self):
         pass
 

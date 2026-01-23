@@ -331,11 +331,11 @@ Access via `python spark_cli.py dashboard`:
     └── memories.db         # SQLite database (Mind storage)
 
 vibeship-spark/
-├── lib/                    # 21 components
+├── lib/                    # 27 modules (~19,500 LOC)
 ├── hooks/                  # 3 hook scripts
 ├── mcp-server/            # Node.js MCP server
-├── tests/                 # 783 tests
-├── processor.py           # Background processor
+├── tests/                 # 925 tests (21 test files)
+├── processor.py           # Background processor + daemon
 └── spark_cli.py           # CLI interface
 ```
 

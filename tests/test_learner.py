@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from lib.queue import SparkEvent, EventType
-from lib.learner import SparkLearner, ToolStats, Pattern
+from lib.learner import SparkLearner, ToolStats, Pattern, ErrorInfo
 
 
 class TestToolStats:
@@ -171,34 +171,49 @@ class TestCategorizeError:
     def test_file_not_found(self):
         """Categorizes file not found errors."""
         learner = SparkLearner()
-        assert learner._categorize_error("No such file or directory") == "file_not_found"
-        assert learner._categorize_error("File not found: test.py") == "file_not_found"
+        # _categorize_error returns (category, fix_hint) tuple
+        category, fix = learner._categorize_error("No such file or directory")
+        assert category == "file_not_found"
+        assert fix is not None  # Should have a fix hint
+        category2, _ = learner._categorize_error("File not found: test.py")
+        assert category2 == "file_not_found"
 
     def test_permission_denied(self):
         """Categorizes permission errors."""
         learner = SparkLearner()
-        assert learner._categorize_error("Permission denied") == "permission_denied"
+        category, fix = learner._categorize_error("Permission denied")
+        assert category == "permission_denied"
+        assert fix is not None
 
     def test_timeout(self):
         """Categorizes timeout errors."""
         learner = SparkLearner()
-        assert learner._categorize_error("Command timeout after 60s") == "timeout"
+        category, fix = learner._categorize_error("Command timeout after 60s")
+        assert category == "timeout"
+        assert fix is not None
 
     def test_edit_not_unique(self):
         """Categorizes edit not unique errors."""
         learner = SparkLearner()
-        assert learner._categorize_error("old_string not unique in file") == "edit_not_unique"
-        assert learner._categorize_error("String is not unique") == "edit_not_unique"
+        category, fix = learner._categorize_error("old_string not unique in file")
+        assert category == "edit_not_unique"
+        assert fix is not None
+        category2, _ = learner._categorize_error("String is not unique")
+        assert category2 == "edit_not_unique"
 
     def test_syntax_error(self):
         """Categorizes syntax errors."""
         learner = SparkLearner()
-        assert learner._categorize_error("SyntaxError: invalid syntax") == "syntax_error"
+        category, fix = learner._categorize_error("SyntaxError: invalid syntax")
+        assert category == "syntax_error"
+        assert fix is not None
 
     def test_other_error(self):
         """Categorizes unknown errors as other."""
         learner = SparkLearner()
-        assert learner._categorize_error("Some random error") == "other"
+        category, fix = learner._categorize_error("Some random error")
+        assert category == "other"
+        # "other" category may or may not have a fix hint
 
 
 class TestGetErrorAvoidance:
@@ -302,22 +317,28 @@ class TestExtractPatterns:
 
     @pytest.mark.asyncio
     async def test_error_avoidance_pattern(self, mock_mind_client):
-        """Extracts error avoidance patterns."""
+        """Extracts error patterns with fix suggestions."""
         learner = SparkLearner(mind_client=mock_mind_client)
 
-        # Add stats with recurring errors
+        # Add stats with recurring errors using error_details (not error_types)
         learner.tool_stats["Edit"] = ToolStats(
             name="Edit",
             total_calls=10,
             successes=6,
             failures=4
         )
-        learner.tool_stats["Edit"].error_types["edit_not_unique"] = 4
+        # Use error_details with ErrorInfo (threshold is count >= 2)
+        learner.tool_stats["Edit"].error_details["edit_not_unique"] = ErrorInfo(
+            category="edit_not_unique",
+            count=4,
+            suggested_fix="Include more surrounding context"
+        )
         learner.session_events = [MagicMock()] * 15
 
         patterns = await learner._extract_patterns()
 
-        error_patterns = [p for p in patterns if p.pattern_type == "error_avoidance"]
+        # Error patterns are now "error_category" type with fix information
+        error_patterns = [p for p in patterns if p.pattern_type == "error_category"]
         assert len(error_patterns) > 0
 
 
@@ -408,3 +429,176 @@ class TestClearSessionData:
 
         assert learner.session_events == []
         assert len(learner.tool_stats) == 0
+
+
+class TestParallelPatternDetection:
+    """Tests for parallel tool pattern detection."""
+
+    def test_detects_parallel_tools(self):
+        """Detects tools called within time window as parallel."""
+        learner = SparkLearner()
+
+        # Simulate two tools called at nearly the same time
+        event1 = SparkEvent(
+            event_type=EventType.POST_TOOL,
+            timestamp=1000.0,
+            session_id="test_session",
+            data={},
+            tool_name="Grep"
+        )
+        event2 = SparkEvent(
+            event_type=EventType.POST_TOOL,
+            timestamp=1000.5,  # Within 2 second window
+            session_id="test_session",
+            data={},
+            tool_name="Glob"
+        )
+
+        # Process events
+        learner._update_tool_stats(event1, success=True)
+        learner._update_tool_stats(event2, success=True)
+
+        # Should have detected parallel combination
+        expected_combo = tuple(sorted(["Glob", "Grep"]))
+        assert expected_combo in learner._parallel_combos
+        assert len(learner._parallel_combos[expected_combo]) >= 1
+
+    def test_ignores_sequential_tools(self):
+        """Does not detect tools outside time window as parallel."""
+        learner = SparkLearner()
+
+        # Tools called 10 seconds apart
+        event1 = SparkEvent(
+            event_type=EventType.POST_TOOL,
+            timestamp=1000.0,
+            session_id="test_session",
+            data={},
+            tool_name="Grep"
+        )
+        event2 = SparkEvent(
+            event_type=EventType.POST_TOOL,
+            timestamp=1010.0,  # 10 seconds later
+            session_id="test_session",
+            data={},
+            tool_name="Glob"
+        )
+
+        learner._update_tool_stats(event1, success=True)
+        learner._update_tool_stats(event2, success=True)
+
+        # Should NOT detect as parallel (outside window)
+        expected_combo = tuple(sorted(["Glob", "Grep"]))
+        assert expected_combo not in learner._parallel_combos
+
+    def test_parallel_across_sessions_ignored(self):
+        """Does not detect tools in different sessions as parallel."""
+        learner = SparkLearner()
+
+        event1 = SparkEvent(
+            event_type=EventType.POST_TOOL,
+            timestamp=1000.0,
+            session_id="session_1",
+            data={},
+            tool_name="Grep"
+        )
+        event2 = SparkEvent(
+            event_type=EventType.POST_TOOL,
+            timestamp=1000.5,
+            session_id="session_2",  # Different session
+            data={},
+            tool_name="Glob"
+        )
+
+        learner._update_tool_stats(event1, success=True)
+        learner._update_tool_stats(event2, success=True)
+
+        # Should NOT detect as parallel (different sessions)
+        expected_combo = tuple(sorted(["Glob", "Grep"]))
+        assert expected_combo not in learner._parallel_combos
+
+
+class TestExtractParallelPatterns:
+    """Tests for parallel pattern extraction."""
+
+    @pytest.mark.asyncio
+    async def test_extracts_successful_parallel_pattern(self, mock_mind_client):
+        """Extracts pattern when parallel tools work well together."""
+        learner = SparkLearner(mind_client=mock_mind_client)
+
+        # Simulate multiple successful parallel executions
+        combo = ("Glob", "Grep")
+        learner._parallel_combos[combo] = [True, True, True, True]  # 100% success
+
+        patterns = learner._extract_parallel_patterns()
+
+        assert len(patterns) == 1
+        assert patterns[0].pattern_type == "parallel_pattern"
+        assert patterns[0].metadata["recommendation"] == "prefer_parallel"
+
+    @pytest.mark.asyncio
+    async def test_extracts_conflict_pattern(self, mock_mind_client):
+        """Extracts pattern when parallel tools often fail."""
+        learner = SparkLearner(mind_client=mock_mind_client)
+
+        # Simulate multiple failed parallel executions
+        combo = ("Edit", "Write")
+        learner._parallel_combos[combo] = [False, False, False, True]  # 25% success
+
+        patterns = learner._extract_parallel_patterns()
+
+        assert len(patterns) == 1
+        assert patterns[0].pattern_type == "parallel_conflict"
+        assert patterns[0].metadata["recommendation"] == "avoid_parallel"
+
+    @pytest.mark.asyncio
+    async def test_ignores_insufficient_samples(self, mock_mind_client):
+        """Ignores parallel combinations with too few samples."""
+        learner = SparkLearner(mind_client=mock_mind_client)
+
+        # Only 1 observation
+        combo = ("Glob", "Grep")
+        learner._parallel_combos[combo] = [True]
+
+        patterns = learner._extract_parallel_patterns()
+
+        assert len(patterns) == 0  # Not enough samples
+
+
+class TestParallelPatternSignature:
+    """Tests for parallel pattern signature creation."""
+
+    def test_parallel_pattern_signature(self):
+        """Creates correct signature for parallel patterns."""
+        from lib.learner import Pattern
+
+        learner = SparkLearner()
+        pattern = Pattern(
+            pattern_type="parallel_pattern",
+            description="Parallel Glob + Grep works well",
+            conditions=[],
+            confidence=0.9,
+            sample_size=5,
+            metadata={"tools": ["Grep", "Glob"]}
+        )
+
+        signature = learner._create_pattern_signature(pattern)
+
+        assert signature == "parallel_pattern:Glob-Grep"
+
+    def test_parallel_conflict_signature(self):
+        """Creates correct signature for parallel conflict patterns."""
+        from lib.learner import Pattern
+
+        learner = SparkLearner()
+        pattern = Pattern(
+            pattern_type="parallel_conflict",
+            description="Parallel Edit + Write fails",
+            conditions=[],
+            confidence=0.8,
+            sample_size=4,
+            metadata={"tools": ["Write", "Edit"]}
+        )
+
+        signature = learner._create_pattern_signature(pattern)
+
+        assert signature == "parallel_conflict:Edit-Write"

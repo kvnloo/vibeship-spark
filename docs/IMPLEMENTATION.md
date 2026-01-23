@@ -12,7 +12,7 @@ This document tracks the implementation status of all Spark components. **Last u
 |--------|-------|
 | Milestones | M1-M11 Complete |
 | Components | 21 |
-| Tests | 783 passing |
+| Tests | 925 passing |
 | Health Check | 21/21 components healthy |
 
 ---
@@ -58,11 +58,12 @@ This document tracks the implementation status of all Spark components. **Last u
 ### M3: Pattern Learning
 | Component | File | Tests | Status |
 |-----------|------|-------|--------|
-| SparkLearner | `lib/learner.py` | 26 | ✅ |
+| SparkLearner | `lib/learner.py` | 40 | ✅ |
 | ToolStats | `lib/learner.py` | - | ✅ |
 | Pattern | `lib/learner.py` | - | ✅ |
+| GoalClassifier | `lib/goal_classifier.py` | 134 | ✅ |
 
-**Features**: Tool effectiveness tracking, error categorization, pattern extraction
+**Features**: Tool effectiveness tracking, error categorization, pattern extraction, parallel tool detection, goal classification
 
 ### M4: Intelligence Layer
 | Component | File | Tests | Status |
@@ -146,8 +147,9 @@ This document tracks the implementation status of all Spark components. **Last u
 | Test File | Tests | Coverage |
 |-----------|-------|----------|
 | test_queue.py | 19 | Queue operations |
-| test_learner.py | 26 | Pattern extraction |
+| test_learner.py | 40 | Pattern extraction, parallel patterns |
 | test_mind_client.py | 25 | Mind integration |
+| test_goal_classifier.py | 134 | Goal classification (comprehensive) |
 | test_injection_tracker.py | 30 | Injection tracking |
 | test_experiment_manager.py | 35 | A/B testing |
 | test_prompt_evolver.py | 35 | Prompt evolution |
@@ -167,7 +169,7 @@ This document tracks the implementation status of all Spark components. **Last u
 | test_conflict_resolver.py | 40 | Conflict resolution |
 | integration/test_*.py | 53 | E2E, chaos, performance |
 
-**Total: 783 tests**
+**Total: 925 tests**
 
 ---
 

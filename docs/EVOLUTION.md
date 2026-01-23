@@ -49,7 +49,7 @@
 - **Timing Patterns** - Learn slow tools, fast tools, and comparisons
 - **Fixed prompt field** - UserPromptSubmit uses 'prompt' not 'message'
 
-### Phase 6: Recursive Self-Improvement (Current)
+### Phase 6: Recursive Self-Improvement
 - **Unified Witness** - Single holistic view of all systems (`lib/witness.py`)
 - **Introspection** - Self-aware gap analysis: blind spots, missing patterns, overconfidence (`lib/introspect.py`)
 - **Auto-Improve** - Act on gaps automatically: create learnings, flag extractions, calibrate (`lib/auto_improve.py`)
@@ -58,6 +58,29 @@
 - **Error Recovery Learning** - Learn "when X fails, try Y" from failure→success sequences
 - **Confidence Calibration** - Adjust predictions based on historical accuracy (`lib/reasoning_tracker.py`)
 - **Recursive Loop Complete** - Introspect -> Improve -> Inject -> Verify (runs without intervention)
+
+### Phase 7: Code Consolidation (2026-01-24)
+- **Architecture Audit** - Comprehensive review: 27 modules, ~19,500 LOC, identified dead code
+- **Shared Goal Classifier** - Created `lib/goal_classifier.py` as single source of truth
+- **Conversational Filtering** - CONVERSATION, AFFIRMATION, CLARIFICATION, META types skip goal tracking
+- **Prediction Learning** - Predictions now flow through to `reasoning_gap` patterns
+- **RealTime Advisor Integration** - Fast pre-tool warnings and recovery suggestions in observe.py
+- **Dead Code Wired Up** - Previously unused code now actively contributes to learning
+
+### Phase 8: Memory & Testing Improvements (2026-01-24)
+- **Mind Pagination Fix** - Added `retrieve_all()` to work around Mind Lite's 100-result limit
+  - `spark_backup.py` now retrieves all learnings, not just first 100
+  - `learning_transfer.py` fixed for transfers >100 learnings
+  - `learner.py` deduplication now checks all existing patterns
+- **Parallel Tool Pattern Learning** - Detect and learn which tools work well together in parallel
+  - Tools called within 2 seconds are detected as parallel
+  - Tracks success/failure rates of parallel combinations
+  - Generates `parallel_pattern` (tools that work well) and `parallel_conflict` (tools that fail) patterns
+- **Goal Classifier Test Coverage** - 134 comprehensive tests for `goal_classifier.py`
+  - Tests for all goal types (DEBUG, FEATURE, REFACTOR, EXPLORE, etc.)
+  - Tests for conversational types (CONVERSATION, AFFIRMATION, CLARIFICATION, META)
+  - Documents classifier behavior including conversational keyword priority
+- **Test Suite Growth** - 783 → 925 tests (142 new tests)
 
 ---
 
@@ -72,6 +95,10 @@
 | Strategy learning | 85% | debug/feature strategies learned |
 | Context injection | 90% | Strategies shown at session start |
 | Advice feedback loop | 80% | 100% follow rate in tests |
+| Goal classification | 90% | Shared classifier with conversational filtering |
+| Pre-tool warnings | 85% | Dangerous patterns detected before execution |
+| Recovery suggestions | 85% | Error categorization with recovery approaches |
+| Prediction learning | 85% | reasoning_gap patterns from overconfidence/underconfidence |
 | Prediction/resolution | 75% | Predictions made and resolved |
 | Goal tracking | 80% | Goals captured, classified, completed |
 | Mind persistence | 95% | Learnings survive restarts |
@@ -81,6 +108,9 @@
 | Autonomous evolution | 95% | Daemon runs introspect/improve every N cycles |
 | Error recovery learning | 85% | Learns "when X fails, try Y" patterns |
 | Confidence calibration | 85% | Adjusts predictions based on track record |
+| Mind pagination | 95% | retrieve_all() works around 100-limit |
+| Parallel tool learning | 90% | Detects parallel calls, learns success patterns |
+| Test coverage | 95% | 925 tests, comprehensive goal_classifier coverage |
 
 ### Strong Patterns Learned
 
@@ -118,7 +148,7 @@ Tool Sequences:
 | ~~No timing patterns~~ | ~~Can't learn "X is faster than Y"~~ | **FIXED** - slow_tool, fast_tool, timing_comparison patterns |
 | ~~No error recovery learning~~ | ~~Can't learn "when X fails, try Y"~~ | **FIXED** - Track failure->success sequences in learner.py |
 | ~~No confidence calibration~~ | ~~Predictions don't improve over time~~ | **FIXED** - Calibration factors in reasoning_tracker.py |
-| No parallel pattern learning | Can't learn which tools work together | Detect concurrent tool calls |
+| ~~No parallel pattern learning~~ | ~~Can't learn which tools work together~~ | **FIXED** - Detects tools called within 2s, learns parallel_pattern/parallel_conflict |
 
 ### Future (Lower Priority)
 
@@ -292,10 +322,11 @@ python spark_live.py advice
 Use this after restarting Claude Code:
 
 ```
-I'm continuing Spark's self-evolution. Last session completed:
-1. Autonomous evolution - daemon runs introspection every N cycles
-2. Error recovery learning - learns "when X fails, try Y" patterns
-3. Confidence calibration - adjusts predictions based on historical accuracy
+I'm continuing Spark's evolution. Last session (2026-01-24) completed Phase 7: Code Consolidation:
+1. Architecture audit - 27 modules, ~19,500 LOC analyzed
+2. Created lib/goal_classifier.py - shared classification with conversational filtering
+3. Wired predictions into reasoning_gap patterns (single occurrence triggers learning)
+4. Integrated RealTimeAdvisor - pre-tool warnings and recovery suggestions in observe.py
 
 To verify: Run `python spark_cli.py health` - should show 21/21 healthy
 
@@ -304,17 +335,19 @@ Key commands:
 - `python spark_cli.py witness` - Unified view of all systems
 - `python spark_cli.py introspect` - Manual gap analysis
 - `python spark_cli.py improve` - Manual improvement
-- `python spark_cli.py calibration` - View confidence calibration factors
 
-Spark is now self-evolving. While the daemon runs, it:
-1. Processes events → extracts patterns → stores learnings
-2. Every 10 cycles: introspects → finds gaps → auto-improves
-3. Session start: injects known gaps so Claude can help address them
-4. Calibrates confidence based on prediction accuracy over time
+What's now working:
+1. Goal classification filters conversational prompts (Yes, Thanks, etc.)
+2. Predictions → reasoning_gap patterns (overconfidence/underconfidence)
+3. Pre-tool warnings for dangerous commands (rm -rf, DROP TABLE, etc.)
+4. Recovery suggestions on failures (not found → use Glob, etc.)
 
-Next priorities from docs/EVOLUTION.md:
-- Expand goal classification (reduce "unknown" type)
+See docs/ARCHITECTURE_AUDIT.md for detailed consolidation status.
+
+Next priorities:
+- Fix Mind 100-limit bug (pagination for backup, transfer, deduplication)
 - Parallel pattern learning (detect concurrent tool calls)
+- Test coverage for new modules (goal_classifier, etc.)
 - Fix test failures (update for new tuple return format)
 ```
 

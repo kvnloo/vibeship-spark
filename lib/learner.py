@@ -55,6 +55,23 @@ class RecoveryPattern:
 
 
 @dataclass
+class ParallelToolGroup:
+    """A group of tools called nearly simultaneously (in parallel)."""
+    tools: Tuple[str, ...]  # Sorted tuple of tool names
+    session_id: str
+    timestamp: float
+    successes: int = 0
+    failures: int = 0
+
+    @property
+    def success_rate(self) -> float:
+        total = self.successes + self.failures
+        if total == 0:
+            return 0.0
+        return self.successes / total
+
+
+@dataclass
 class ReasoningStats:
     """Statistics for reasoning/prediction accuracy."""
     tool_name: str
@@ -122,6 +139,11 @@ class SparkLearner:
         # Cross-tool recovery tracking
         self._last_failure: Optional[Dict[str, Any]] = None
         self._recovery_patterns: Dict[str, RecoveryPattern] = {}  # key -> RecoveryPattern
+
+        # Parallel tool tracking
+        self._recent_tool_calls: List[Dict[str, Any]] = []  # Recent calls for parallel detection
+        self._parallel_combos: Dict[Tuple[str, ...], List[bool]] = defaultdict(list)  # combo -> [success, ...]
+        self._parallel_window_sec = 2.0  # Window for considering tools as parallel
 
     async def load_existing_learnings(self):
         """Load existing learnings from Mind to initialize weights."""
@@ -244,6 +266,43 @@ class SparkLearner:
 
         if event.duration_ms:
             stats.total_duration_ms += event.duration_ms
+
+        # Track parallel tool calls
+        self._detect_parallel_tools(event, success)
+
+    def _detect_parallel_tools(self, event: SparkEvent, success: bool):
+        """Detect if this tool was called in parallel with others."""
+        tool_name = event.tool_name or "unknown"
+        timestamp = event.timestamp
+        session_id = event.session_id
+
+        # Clean up old calls (outside the parallel window)
+        cutoff = timestamp - self._parallel_window_sec
+        self._recent_tool_calls = [
+            call for call in self._recent_tool_calls
+            if call["timestamp"] > cutoff
+        ]
+
+        # Find parallel calls (same session, within time window)
+        parallel_tools = [
+            call["tool"] for call in self._recent_tool_calls
+            if call["session_id"] == session_id and call["tool"] != tool_name
+        ]
+
+        # Record parallel combination if found
+        if parallel_tools:
+            # Create sorted tuple of tools for consistent key
+            all_tools = tuple(sorted(set([tool_name] + parallel_tools)))
+            if len(all_tools) >= 2:  # At least 2 tools in parallel
+                self._parallel_combos[all_tools].append(success)
+
+        # Add this call to recent calls
+        self._recent_tool_calls.append({
+            "tool": tool_name,
+            "timestamp": timestamp,
+            "session_id": session_id,
+            "success": success
+        })
 
     def _check_recovery(self, success_event: SparkEvent):
         """Check if this success recovered from a previous failure."""
@@ -472,32 +531,45 @@ class SparkLearner:
 
         # Pattern 6: Reasoning learnings (from prediction gaps)
         if self.reasoning_learnings:
-            # Deduplicate and count similar learnings
-            learning_counts: Dict[str, int] = {}
-            for learning in self.reasoning_learnings:
-                # Normalize to first 50 chars for grouping
-                key = learning[:50].lower()
-                learning_counts[key] = learning_counts.get(key, 0) + 1
+            # Group by learning type (PREDICTION_WRONG vs PREDICTION_PESSIMISTIC)
+            wrong_learnings: List[str] = []
+            pessimistic_learnings: List[str] = []
 
-            for learning_key, count in learning_counts.items():
-                if count >= 2:  # Recurring pattern
-                    # Find the full learning
-                    full_learning = next(
-                        (l for l in self.reasoning_learnings if l[:50].lower() == learning_key),
-                        learning_key
-                    )
-                    pattern = Pattern(
-                        pattern_type="reasoning_gap",
-                        description=full_learning,
-                        conditions=["prediction != outcome"],
-                        confidence=min(count / 5, 1.0),
-                        sample_size=count,
-                        metadata={
-                            "learning_type": "prediction_gap",
-                            "occurrences": count
-                        }
-                    )
-                    patterns.append(pattern)
+            for learning in self.reasoning_learnings:
+                if "PREDICTION_WRONG" in learning:
+                    wrong_learnings.append(learning)
+                elif "PREDICTION_PESSIMISTIC" in learning:
+                    pessimistic_learnings.append(learning)
+
+            # Create pattern for overconfidence (single occurrence is enough to learn)
+            if wrong_learnings:
+                pattern = Pattern(
+                    pattern_type="reasoning_gap",
+                    description=f"Overconfident predictions: {len(wrong_learnings)} times",
+                    conditions=["predicted_success=True", "actual_success=False"],
+                    confidence=min(0.5 + len(wrong_learnings) * 0.1, 0.9),
+                    sample_size=len(wrong_learnings),
+                    metadata={
+                        "learning_type": "overconfidence",
+                        "examples": wrong_learnings[:3]  # Keep first 3 examples
+                    }
+                )
+                patterns.append(pattern)
+
+            # Create pattern for underconfidence
+            if pessimistic_learnings:
+                pattern = Pattern(
+                    pattern_type="reasoning_gap",
+                    description=f"Pessimistic predictions: {len(pessimistic_learnings)} times",
+                    conditions=["predicted_success=False", "actual_success=True"],
+                    confidence=min(0.5 + len(pessimistic_learnings) * 0.1, 0.9),
+                    sample_size=len(pessimistic_learnings),
+                    metadata={
+                        "learning_type": "underconfidence",
+                        "examples": pessimistic_learnings[:3]
+                    }
+                )
+                patterns.append(pattern)
 
         # Pattern 7: Timing patterns (what's fast, what's slow)
         timing_patterns = self._extract_timing_patterns()
@@ -506,6 +578,10 @@ class SparkLearner:
         # Pattern 8: Recovery patterns (when X fails, try Y)
         recovery_patterns = self._extract_recovery_patterns()
         patterns.extend(recovery_patterns)
+
+        # Pattern 9: Parallel tool patterns (tools that work well together)
+        parallel_patterns = self._extract_parallel_patterns()
+        patterns.extend(parallel_patterns)
 
         return patterns
 
@@ -569,6 +645,52 @@ class SparkLearner:
                         }
                     )
                     patterns.append(pattern)
+
+        return patterns
+
+    def _extract_parallel_patterns(self) -> List[Pattern]:
+        """Extract patterns about tools that work well together in parallel."""
+        patterns = []
+
+        for combo, outcomes in self._parallel_combos.items():
+            sample_count = len(outcomes)
+            if sample_count < 2:  # Need at least 2 observations
+                continue
+
+            success_rate = sum(outcomes) / sample_count
+            tools_str = " + ".join(combo)
+
+            # High success rate - these tools work well together
+            if success_rate >= 0.8 and sample_count >= 3:
+                pattern = Pattern(
+                    pattern_type="parallel_pattern",
+                    description=f"Parallel {tools_str} works well ({success_rate:.0%} success)",
+                    conditions=[f"parallel_tools={combo}"],
+                    confidence=min(sample_count / 10, 1.0),
+                    sample_size=sample_count,
+                    metadata={
+                        "tools": list(combo),
+                        "success_rate": success_rate,
+                        "recommendation": "prefer_parallel"
+                    }
+                )
+                patterns.append(pattern)
+
+            # Low success rate - these tools may conflict when parallel
+            elif success_rate < 0.5 and sample_count >= 3:
+                pattern = Pattern(
+                    pattern_type="parallel_conflict",
+                    description=f"Parallel {tools_str} often fails ({success_rate:.0%} success) - run sequentially",
+                    conditions=[f"parallel_tools={combo}"],
+                    confidence=min(sample_count / 10, 1.0),
+                    sample_size=sample_count,
+                    metadata={
+                        "tools": list(combo),
+                        "success_rate": success_rate,
+                        "recommendation": "avoid_parallel"
+                    }
+                )
+                patterns.append(pattern)
 
         return patterns
 
@@ -877,6 +999,9 @@ class SparkLearner:
         elif pattern.pattern_type == "recovery_strategy":
             key = pattern.metadata.get("pattern_key", "")
             return f"recovery:{key}"
+        elif pattern.pattern_type in ("parallel_pattern", "parallel_conflict"):
+            tools = pattern.metadata.get("tools", [])
+            return f"{pattern.pattern_type}:{'-'.join(sorted(tools))}"
         else:
             # Fallback: use conditions
             return f"{pattern.pattern_type}:{':'.join(pattern.conditions)}"
@@ -886,10 +1011,10 @@ class SparkLearner:
         signatures = set()
 
         try:
-            # Query for existing learnings
-            learnings = await self.mind.retrieve(
+            # Query for existing learnings with pagination (Mind Lite caps at 100)
+            learnings = await self.mind.retrieve_all(
                 query="LEARNING",
-                limit=100,
+                max_results=500,  # Get more for better deduplication
                 temporal_level=TemporalLevel.IDENTITY,
                 content_type=ContentType.REFLECTION
             )

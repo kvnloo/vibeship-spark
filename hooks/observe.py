@@ -25,6 +25,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from lib.queue import quick_capture, EventType
 from lib.intent_inferrer import infer_intent, predict_outcome
+from lib.goal_classifier import classify_goal, should_track_as_goal, GoalType
 
 # Fast file-based prediction storage
 PREDICTIONS_FILE = Path.home() / ".spark" / "predictions.json"
@@ -32,6 +33,130 @@ PREDICTIONS_FILE = Path.home() / ".spark" / "predictions.json"
 INJECTIONS_FILE = Path.home() / ".spark" / "active_injections.json"
 # Active goals file (for goal tracking)
 GOALS_FILE = Path.home() / ".spark" / "active_goals.json"
+# Warning history file (avoid duplicate warnings)
+WARNINGS_FILE = Path.home() / ".spark" / "warning_history.json"
+
+
+# ============================================================================
+# REALTIME ADVISOR - Fast pre-tool warnings
+# ============================================================================
+
+# Dangerous command patterns (severity, description)
+DANGEROUS_PATTERNS = {
+    "rm -rf": ("error", "Recursive force delete can cause data loss"),
+    "rm -r": ("warning", "Recursive delete - verify path carefully"),
+    "> /": ("error", "Redirecting to root path can corrupt system"),
+    "chmod 777": ("warning", "Setting world-writable permissions is insecure"),
+    "DROP TABLE": ("error", "SQL table drop is destructive"),
+    "DELETE FROM": ("warning", "SQL delete without WHERE affects all rows"),
+    "git push -f": ("warning", "Force push can overwrite remote history"),
+    "git reset --hard": ("warning", "Hard reset discards uncommitted changes"),
+    "--no-verify": ("info", "Skipping git hooks"),
+    "eval(": ("warning", "eval() can execute arbitrary code"),
+    "exec(": ("warning", "exec() can execute arbitrary code"),
+}
+
+# Patterns that suggest potential issues
+RISKY_FILE_PATTERNS = {
+    ".env": ("warning", "Modifying environment file - contains secrets?"),
+    "credentials": ("warning", "Modifying credentials file"),
+    "password": ("warning", "File may contain sensitive data"),
+    "/etc/": ("error", "Modifying system configuration"),
+    "node_modules": ("info", "Modifying vendor code - usually not recommended"),
+}
+
+
+def fast_pre_tool_warning(tool_name: str, tool_input: dict) -> dict:
+    """
+    Fast pre-tool warning check. Must complete in <5ms.
+
+    Returns warning dict if issue detected, empty dict otherwise.
+    """
+    warning = {}
+
+    try:
+        if tool_name == "Bash":
+            command = tool_input.get("command", "").lower()
+            for pattern, (severity, desc) in DANGEROUS_PATTERNS.items():
+                if pattern.lower() in command:
+                    warning = {
+                        "severity": severity,
+                        "pattern": pattern,
+                        "description": desc
+                    }
+                    break
+
+        elif tool_name in ("Write", "Edit"):
+            file_path = tool_input.get("file_path", "").lower()
+            for pattern, (severity, desc) in RISKY_FILE_PATTERNS.items():
+                if pattern.lower() in file_path:
+                    warning = {
+                        "severity": severity,
+                        "pattern": pattern,
+                        "description": desc
+                    }
+                    break
+    except Exception:
+        pass  # Never fail - just skip warning
+
+    return warning
+
+
+def get_recovery_suggestion(tool_name: str, error: str) -> dict:
+    """
+    Fast recovery suggestion based on error type. Must complete in <5ms.
+
+    Returns suggestion dict if applicable, empty dict otherwise.
+    """
+    suggestion = {}
+
+    try:
+        error_lower = error.lower() if error else ""
+
+        # String not found (Edit tool) - check BEFORE general "not found"
+        if "old_string" in error_lower or "not found in file" in error_lower:
+            suggestion = {
+                "category": "string_not_found",
+                "approach": "Read the file first to verify exact content",
+                "alternative_tools": ["Read", "Grep"]
+            }
+
+        # File not found
+        elif "not found" in error_lower or "no such file" in error_lower:
+            suggestion = {
+                "category": "not_found",
+                "approach": "Use Glob to search for the file",
+                "alternative_tools": ["Glob", "Grep"]
+            }
+
+        # Permission denied
+        elif "permission denied" in error_lower or "access denied" in error_lower:
+            suggestion = {
+                "category": "permission",
+                "approach": "Check file permissions or run with appropriate access",
+                "alternative_tools": []
+            }
+
+        # Syntax error
+        elif "syntax error" in error_lower or "syntaxerror" in error_lower:
+            suggestion = {
+                "category": "syntax",
+                "approach": "Review the code syntax, check for missing brackets/quotes",
+                "alternative_tools": ["Read"]
+            }
+
+        # Timeout
+        elif "timeout" in error_lower or "timed out" in error_lower:
+            suggestion = {
+                "category": "timeout",
+                "approach": "Try with a smaller scope or run in background",
+                "alternative_tools": []
+            }
+
+    except Exception:
+        pass  # Never fail
+
+    return suggestion
 
 
 def get_event_type(hook_event_name: str) -> EventType:
@@ -153,6 +278,7 @@ def capture_goal(session_id: str, user_prompt: str) -> dict:
     Capture a user goal from their prompt.
 
     This is the strategic layer - understanding WHAT the user wants to achieve.
+    Uses the shared goal_classifier for consistent classification.
     """
     try:
         GOALS_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -165,26 +291,36 @@ def capture_goal(session_id: str, user_prompt: str) -> dict:
             except:
                 goals = {}
 
-        # Classify the goal
-        goal_type = _classify_goal(user_prompt)
+        # Classify the goal using shared classifier
+        goal_type_enum, confidence = classify_goal(user_prompt)
+        goal_type = goal_type_enum.value
         description = user_prompt[:100].split('.')[0].strip()
 
         goal_id = f"goal_{hash(f'{session_id}:{user_prompt[:50]}:{time.time()}') % 100000000:08x}"
+
+        # Check if this is a conversational prompt (not a real goal)
+        is_conversational = not should_track_as_goal(goal_type_enum)
 
         goal = {
             "goal_id": goal_id,
             "session_id": session_id,
             "created_at": time.time(),
             "goal_type": goal_type,
+            "confidence": confidence,
             "description": description,
             "actions": [],
-            "status": "active"
+            "status": "active",
+            "is_conversational": is_conversational
         }
 
-        # Mark any previous goal for this session as abandoned
-        for g_id, g in list(goals.items()):
-            if g.get("session_id") == session_id and g.get("status") == "active":
-                g["status"] = "abandoned"
+        # Only mark previous goals as abandoned if this is a REAL goal
+        # Conversational prompts shouldn't invalidate active goals
+        if not is_conversational:
+            for g_id, g in list(goals.items()):
+                if g.get("session_id") == session_id and g.get("status") == "active":
+                    # Only abandon if the previous goal wasn't conversational
+                    if not g.get("is_conversational", False):
+                        g["status"] = "abandoned"
 
         goals[goal_id] = goal
 
@@ -199,40 +335,23 @@ def capture_goal(session_id: str, user_prompt: str) -> dict:
         return {
             "goal_captured": True,
             "goal_id": goal_id,
-            "goal_type": goal_type
+            "goal_type": goal_type,
+            "confidence": confidence,
+            "is_conversational": is_conversational
         }
 
     except Exception:
         return {}
 
 
-def _classify_goal(prompt: str) -> str:
-    """Classify goal type from prompt."""
-    prompt_lower = prompt.lower()
-
-    DEBUG = ["fix", "bug", "error", "broken", "fail", "crash", "issue", "wrong", "debug"]
-    FEATURE = ["add", "create", "implement", "build", "new", "feature", "make"]
-    REFACTOR = ["refactor", "improve", "clean", "optimize", "simplify", "rename"]
-    EXPLORE = ["find", "search", "where", "what", "how", "understand", "look", "show", "analyze", "check", "review", "examine", "inspect"]
-    TEST = ["test", "spec", "coverage", "verify"]
-
-    scores = {
-        "debug": sum(1 for k in DEBUG if k in prompt_lower),
-        "feature": sum(1 for k in FEATURE if k in prompt_lower),
-        "refactor": sum(1 for k in REFACTOR if k in prompt_lower),
-        "explore": sum(1 for k in EXPLORE if k in prompt_lower),
-        "test": sum(1 for k in TEST if k in prompt_lower),
-    }
-
-    best = max(scores, key=scores.get)
-    return best if scores[best] > 0 else "unknown"
+# _classify_goal removed - now using shared lib/goal_classifier.py
 
 
 def track_goal_progress(session_id: str, tool_name: str, success: bool) -> dict:
     """
     Track progress toward the current goal.
 
-    Returns progress info.
+    Returns progress info. Skips conversational goals.
     """
     try:
         if not GOALS_FILE.exists():
@@ -240,10 +359,12 @@ def track_goal_progress(session_id: str, tool_name: str, success: bool) -> dict:
 
         goals = json.loads(GOALS_FILE.read_text())
 
-        # Find active goal for this session
+        # Find active REAL goal for this session (not conversational)
         active_goal = None
         for g_id, g in goals.items():
-            if g.get("session_id") == session_id and g.get("status") == "active":
+            if (g.get("session_id") == session_id and
+                g.get("status") == "active" and
+                not g.get("is_conversational", False)):
                 active_goal = g
                 break
 
@@ -261,7 +382,8 @@ def track_goal_progress(session_id: str, tool_name: str, success: bool) -> dict:
 
         return {
             "goal_type": active_goal.get("goal_type"),
-            "actions_count": len(active_goal["actions"])
+            "actions_count": len(active_goal["actions"]),
+            "is_conversational": False
         }
 
     except Exception:
@@ -271,6 +393,8 @@ def track_goal_progress(session_id: str, tool_name: str, success: bool) -> dict:
 def check_goal_completion(session_id: str, user_message: str) -> dict:
     """
     Check if user message signals goal completion.
+
+    Only checks real goals, not conversational ones.
     """
     try:
         if not GOALS_FILE.exists():
@@ -278,11 +402,13 @@ def check_goal_completion(session_id: str, user_message: str) -> dict:
 
         goals = json.loads(GOALS_FILE.read_text())
 
-        # Find active goal
+        # Find active REAL goal (not conversational)
         active_goal = None
         goal_id = None
         for g_id, g in goals.items():
-            if g.get("session_id") == session_id and g.get("status") == "active":
+            if (g.get("session_id") == session_id and
+                g.get("status") == "active" and
+                not g.get("is_conversational", False)):
                 active_goal = g
                 goal_id = g_id
                 break
@@ -447,6 +573,11 @@ def main():
                 "risks": prediction.get("risks", [])
             }
 
+        # REALTIME ADVISOR: Check for dangerous patterns before execution
+        warning = fast_pre_tool_warning(tool_name, tool_input)
+        if warning:
+            data["pre_tool_warning"] = warning
+
     # For failure events, include error info
     error = None
     if "tool_error" in input_data:
@@ -475,6 +606,12 @@ def main():
         goal_progress = track_goal_progress(session_id, tool_name, success)
         if goal_progress:
             data["goal_progress"] = goal_progress
+
+        # REALTIME ADVISOR: On failure, suggest recovery
+        if event_type == EventType.POST_TOOL_FAILURE and error:
+            recovery = get_recovery_suggestion(tool_name, error)
+            if recovery:
+                data["recovery_suggestion"] = recovery
 
     # GOALS: Capture goal from user prompt
     if event_type == EventType.USER_PROMPT:

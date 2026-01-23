@@ -98,6 +98,7 @@ def mock_mind_client():
     mock.store = AsyncMock(return_value="mock_memory_id")
     mock.store_batch = AsyncMock(return_value=1)
     mock.retrieve = AsyncMock(return_value=[])
+    mock.retrieve_all = AsyncMock(return_value=[])  # Pagination-aware retrieval
     mock.close = AsyncMock()
 
     return mock

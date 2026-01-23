@@ -29,6 +29,11 @@ def mock_mind_client():
         {"content": "Learning 1", "temporal_level": 2, "salience": 0.8},
         {"content": "Learning 2", "temporal_level": 3, "salience": 0.7}
     ])
+    # Also mock retrieve_all for pagination-aware methods
+    client.retrieve_all = AsyncMock(return_value=[
+        {"content": "Learning 1", "temporal_level": 2, "salience": 0.8},
+        {"content": "Learning 2", "temporal_level": 3, "salience": 0.7}
+    ])
     client.store = AsyncMock(return_value="mem_123")
     return client
 

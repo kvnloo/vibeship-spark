@@ -228,12 +228,14 @@ class SparkBackup:
         return manifest
 
     async def _export_learnings(self) -> List[Dict[str, Any]]:
-        """Export learnings from Mind."""
+        """Export learnings from Mind using pagination."""
         if not self.mind:
             return []
 
         try:
-            learnings = await self.mind.retrieve("", limit=1000)
+            # Use retrieve_all for paginated retrieval (Mind Lite caps at 100)
+            # Query for LEARNING patterns which is what Spark stores
+            learnings = await self.mind.retrieve_all("LEARNING", max_results=1000)
             return [
                 {
                     "content": l.get("content", ""),

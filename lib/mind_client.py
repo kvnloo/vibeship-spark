@@ -163,6 +163,108 @@ class MindClient:
         except Exception:
             return []
 
+    async def retrieve_all(
+        self,
+        query: str,
+        max_results: int = 1000,
+        batch_size: int = 100,
+        temporal_level: Optional[TemporalLevel] = None,
+        content_type: Optional[ContentType] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieve ALL memories matching a query using pagination.
+
+        Mind Lite has a hard cap of 100 results per query.
+        This method uses multiple queries to get all matching memories.
+
+        Uses memory_id tracking to avoid duplicates across batches.
+
+        Args:
+            query: Search query
+            max_results: Maximum total results to return
+            batch_size: Results per batch (max 100 for Mind Lite)
+            temporal_level: Optional filter
+            content_type: Optional filter
+
+        Returns:
+            List of all matching memories up to max_results
+        """
+        all_results = []
+        seen_ids = set()
+        batch_size = min(batch_size, 100)  # Mind Lite caps at 100
+
+        # First batch
+        batch = await self.retrieve(
+            query=query,
+            limit=batch_size,
+            temporal_level=temporal_level,
+            content_type=content_type
+        )
+
+        if not batch:
+            return all_results
+
+        # Add first batch, tracking IDs
+        for memory in batch:
+            memory_id = memory.get("memory_id")
+            if memory_id and memory_id not in seen_ids:
+                seen_ids.add(memory_id)
+                all_results.append(memory)
+
+        # If we got less than batch_size, there are no more results
+        if len(batch) < batch_size:
+            return all_results[:max_results]
+
+        # For additional batches, we need to use offset-based approach
+        # Mind Lite supports list endpoint with offset
+        offset = batch_size
+        while len(all_results) < max_results:
+            try:
+                session = await self._get_session()
+                # Use the list endpoint with offset for pagination
+                async with session.get(
+                    f"{self.base_url}/v1/memories/",
+                    params={"limit": batch_size, "offset": offset}
+                ) as resp:
+                    if resp.status != 200:
+                        break
+                    data = await resp.json()
+
+                    # Handle both list and dict response formats
+                    if isinstance(data, list):
+                        batch = data
+                    else:
+                        batch = data.get("memories", data.get("items", []))
+
+                    if not batch:
+                        break
+
+                    # Filter by query content (since list endpoint doesn't filter)
+                    query_lower = query.lower()
+                    for memory in batch:
+                        memory_id = memory.get("memory_id")
+                        content = memory.get("content", "").lower()
+
+                        # Check if matches query and not seen
+                        if memory_id and memory_id not in seen_ids:
+                            if query_lower in content:
+                                seen_ids.add(memory_id)
+                                all_results.append(memory)
+
+                                if len(all_results) >= max_results:
+                                    break
+
+                    offset += batch_size
+
+                    # If batch is smaller than requested, no more results
+                    if len(batch) < batch_size:
+                        break
+
+            except Exception:
+                break
+
+        return all_results[:max_results]
+
     async def get_stats(self) -> Dict[str, Any]:
         """Get Mind statistics."""
         try:

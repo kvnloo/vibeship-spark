@@ -12,7 +12,7 @@
 |--------|-------|
 | Milestones | M1-M11 Complete |
 | Components | 21 |
-| Tests | 783 passing |
+| Tests | 925 passing |
 | Health Check | 21/21 healthy |
 
 ## Quick Context
@@ -84,7 +84,7 @@ vibeship-spark/
 │   ├── session_start.py          # Load context
 │   └── session_end.py            # Trigger learning
 ├── mcp-server/                   # Node.js MCP server (built)
-├── tests/                        # 783 tests
+├── tests/                        # 925 tests
 ├── docs/                         # Documentation
 │   ├── FLOW.md                   # Data flow diagrams
 │   ├── IMPLEMENTATION.md         # Complete status

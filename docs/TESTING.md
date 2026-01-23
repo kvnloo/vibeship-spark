@@ -14,14 +14,42 @@ This document defines the testing strategy for Spark, including unit tests, inte
 ## Test Structure
 
 ```
-tests/
-├── conftest.py           # Shared fixtures
-├── test_queue.py         # Queue unit tests
-├── test_learner.py       # Learner unit tests
-├── test_mind_client.py   # Mind client tests (mocked)
-├── test_hooks.py         # Hook behavior tests
-├── test_processor.py     # Processor tests
-└── test_integration.py   # End-to-end tests
+tests/                              # 925 tests total
+├── conftest.py                     # Shared fixtures
+│
+│   # Core Infrastructure Tests
+├── test_queue.py                   # 19 tests - Queue operations
+├── test_mind_client.py             # 25 tests - Mind integration
+├── test_learner.py                 # 40 tests - Pattern extraction, parallel patterns
+│
+│   # Learning Component Tests
+├── test_prompt_evolver.py          # 35 tests - Prompt evolution
+├── test_meta_learner.py            # 32 tests - Meta-learning
+├── test_suggester.py               # 28 tests - Suggestions
+├── test_skill_evolver.py           # 35 tests - Skill tracking
+├── test_orchestrator.py            # 32 tests - Agent orchestration
+├── test_injection_tracker.py       # 30 tests - Injection tracking
+├── test_experiment_manager.py      # 35 tests - A/B testing
+│
+│   # Goal & Classification Tests
+├── test_goal_classifier.py         # 134 tests - Goal classification
+│
+│   # Operations Tests
+├── test_realtime_advisor.py        # 47 tests - Real-time warnings
+├── test_mcp_server.py              # 44 tests - MCP tools
+├── test_spark_dashboard.py         # 37 tests - Dashboard UI
+├── test_spark_debugger.py          # 40 tests - Debug/trace
+├── test_spark_backup.py            # 32 tests - Backup/restore
+├── test_conflict_resolver.py       # 40 tests - Conflict resolution
+├── test_context_injector.py        # 30 tests - Context injection
+│
+│   # Cross-Project Tests
+├── test_project_analyzer.py        # 28 tests - Project detection
+├── test_learning_transfer.py       # 30 tests - Learning transfer
+├── test_pattern_breeder.py         # 38 tests - Genetic evolution
+│
+└── integration/                    # E2E, chaos, performance tests
+    └── test_*.py                   # 53 integration tests
 ```
 
 ---
@@ -617,13 +645,14 @@ pytest tests/test_integration.py -v
 
 ## Coverage Goals
 
-| Component | Target | Current |
-|-----------|--------|---------|
-| lib/queue.py | 90% | 0% |
-| lib/learner.py | 85% | 0% |
-| lib/mind_client.py | 80% | 0% |
-| hooks/*.py | 70% | 0% |
-| processor.py | 75% | 0% |
+| Component | Target | Status |
+|-----------|--------|--------|
+| lib/queue.py | 90% | ✅ 19 tests |
+| lib/learner.py | 85% | ✅ 40 tests |
+| lib/mind_client.py | 80% | ✅ 25 tests |
+| lib/goal_classifier.py | 90% | ✅ 134 tests |
+| lib/realtime_advisor.py | 85% | ✅ 47 tests |
+| All components | 80% | ✅ 925 tests total |
 
 ---
 

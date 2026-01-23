@@ -411,9 +411,10 @@ class LearningTransfer:
         if not self.mind or not await self.mind.is_available():
             return 0
 
-        memories = await self.mind.retrieve(
+        # Use retrieve_all for paginated retrieval (Mind Lite caps at 100)
+        memories = await self.mind.retrieve_all(
             query="TRANSFERABLE_LEARNING",
-            limit=200
+            max_results=200
         )
 
         loaded = 0
