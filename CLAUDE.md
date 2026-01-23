@@ -4,86 +4,146 @@
 
 **Spark** is an ambient self-evolving intelligence layer for Claude Code. It's not a tool you invoke—it IS the intelligence that wraps around everything Claude does, observing, measuring, learning, and improving continuously.
 
+## System Status: COMPLETE
+
+**Spark is feature-complete for single-user operation (January 2025)**
+
+| Metric | Value |
+|--------|-------|
+| Milestones | M1-M11 Complete |
+| Components | 21 |
+| Tests | 783 passing |
+| Health Check | 21/21 healthy |
+
 ## Quick Context
 
 Spark is part of the **Vibeship Ecosystem**:
-- **Vibeship Mind** - Persistent memory and learning storage
+- **Vibeship Mind** - Persistent memory and learning storage (required)
 - **Vibeship Spark** - Self-improving orchestration intelligence (this project)
 - **Vibeship Spawner** - Skills and agent orchestration
 
-## Current Status (January 2025)
+---
 
-### What's Working
-- [x] Hook system installed at user level (`~/.claude/settings.json`)
-- [x] Event capture via queue (< 50ms, non-blocking)
-- [x] Mind integration for persistent learning
-- [x] Pattern extraction (tool effectiveness, error avoidance)
-- [x] Background processor for learning
-- [x] Basic tests passing
+## Quick Start
 
-### What's Remaining
-- [ ] MCP server for direct Spark invocation
-- [ ] Unit tests for all components
-- [ ] Skill evolution system
-- [ ] Prompt evolution system
-- [ ] Agent orchestration learning
-- [ ] Session context injection (learnings → Claude)
-- [ ] Meta-learning (learning about learning)
+### 1. Start Mind (Required)
 
-## Architecture
+```bash
+# From the-mind directory
+start_mind_lite.bat
+
+# Or manually:
+cd C:\Users\USER\Desktop\the-mind\vibeship-mind
+python src\mind\lite_tier.py
+```
+
+### 2. Verify Spark
+
+```bash
+cd C:\Users\USER\Desktop\vibeship-spark
+python spark_cli.py health
+```
+
+Expected output: `21/21 components healthy`
+
+### 3. That's It!
+
+Spark hooks are already installed. They observe every tool call automatically.
+
+---
+
+## Architecture Overview
+
+See `docs/FLOW.md` for the complete data flow diagram.
 
 ```
 vibeship-spark/
-├── lib/                    # Core library
-│   ├── queue.py           # Ultra-fast event capture
-│   ├── mind_client.py     # Async Mind integration
-│   └── learner.py         # Pattern extraction engine
-├── hooks/                  # Claude Code hooks
-│   ├── observe.py         # Captures tool events
-│   ├── session_start.py   # Loads context from Mind
-│   └── session_end.py     # Triggers learning
-├── mcp-server/            # MCP server (TODO)
-│   └── src/
-├── tests/                 # Unit tests (TODO)
-├── docs/                  # Documentation
-│   ├── PRD.md            # Product requirements
-│   ├── ARCHITECTURE.md   # System design
-│   ├── IMPLEMENTATION.md # Implementation plan
-│   └── TESTING.md        # Test strategy
-├── processor.py           # Background learning processor
-├── setup.py              # Installation/management
-└── spark-hooks.json      # Hook configuration
+├── lib/                          # 21 Core components
+│   ├── queue.py                  # M1: Event queue (<10ms writes)
+│   ├── mind_client.py            # M2: Mind integration
+│   ├── learner.py                # M3: Pattern learning
+│   ├── prompt_evolver.py         # M4: Prompt evolution
+│   ├── meta_learner.py           # M4: Meta-learning
+│   ├── suggester.py              # M4: Suggestions
+│   ├── injection_tracker.py      # M5: Injection tracking
+│   ├── experiment_manager.py     # M5: A/B testing
+│   ├── project_analyzer.py       # M6: Project detection
+│   ├── learning_transfer.py      # M6: Cross-project learning
+│   ├── pattern_breeder.py        # M7: Genetic evolution
+│   ├── realtime_advisor.py       # M8: Real-time warnings
+│   ├── spark_mcp_server.py       # M8: MCP tools
+│   ├── skill_evolver.py          # M9: Skill tracking
+│   ├── context_injector.py       # M9: Context injection
+│   ├── orchestrator.py           # M9: Agent orchestration
+│   ├── spark_dashboard.py        # M10: Terminal UI
+│   ├── spark_debugger.py         # M10: Debug/trace
+│   ├── spark_backup.py           # M10: Backup/restore
+│   └── conflict_resolver.py      # M11: Conflict resolution
+├── hooks/                        # Claude Code hooks
+│   ├── observe.py                # Capture tool events
+│   ├── session_start.py          # Load context
+│   └── session_end.py            # Trigger learning
+├── mcp-server/                   # Node.js MCP server (built)
+├── tests/                        # 783 tests
+├── docs/                         # Documentation
+│   ├── FLOW.md                   # Data flow diagrams
+│   ├── IMPLEMENTATION.md         # Complete status
+│   ├── PRD.md                    # Requirements
+│   └── ARCHITECTURE.md           # System design
+├── processor.py                  # Background processor
+└── spark_cli.py                  # CLI interface
 ```
+
+---
 
 ## Development Commands
 
-### Check Status
+### Health Check
 ```bash
-python setup.py status
+python spark_cli.py health
 ```
 
 ### Run Tests
 ```bash
-python setup.py test
+python -m pytest tests/ -v
 
-# Unit tests (when implemented)
-pytest tests/ -v
+# Specific component
+python -m pytest tests/test_conflict_resolver.py -v
 ```
 
-### Process Queue Manually
+### Process Queue
 ```bash
+# Single pass
 python processor.py --mode once
-```
 
-### Run Learning Daemon
-```bash
+# Background daemon
 python processor.py --mode daemon --interval 30
-```
 
-### Run Deep Reflection
-```bash
+# Deep reflection
 python processor.py --mode reflect
 ```
+
+### Dashboard
+```bash
+python spark_cli.py dashboard
+```
+
+---
+
+## MCP Tools
+
+When the Spark MCP server is loaded, these tools are available:
+
+| Tool | Description |
+|------|-------------|
+| `spark_status` | System health, Mind connection |
+| `spark_learnings` | Query stored learnings |
+| `spark_reflect` | Trigger deep reflection |
+| `spark_process` | Process pending events |
+| `spark_stats` | Learning statistics |
+| `spark_clear_queue` | Clear event queue |
+
+---
 
 ## Key Design Principles
 
@@ -96,8 +156,10 @@ If Mind is unavailable, events queue locally. Learning happens when Mind returns
 ### 3. Continuous Evolution
 Every action improves the next. No commands needed—Spark is always learning.
 
-### 4. Mind is the Core
-All learnings persist in Vibeship Mind at temporal_level 4 (identity/permanent).
+### 4. Conflict Resolution
+When learnings conflict: scope > score > experiment > recency
+
+---
 
 ## The Self-Improvement Loop
 
@@ -106,11 +168,13 @@ OBSERVE → DECIDE → ACT → MEASURE → LEARN → IMPROVE → (repeat)
 ```
 
 1. **OBSERVE**: Capture every tool call and result
-2. **DECIDE**: Use learnings to inform decisions (TODO: implement)
+2. **DECIDE**: Use learnings to inform approach (context injection)
 3. **ACT**: Execute via tools, skills, agents
 4. **MEASURE**: Track success/failure, timing, errors
 5. **LEARN**: Extract patterns from accumulated data
 6. **IMPROVE**: Update behavior weights, evolve prompts/skills
+
+---
 
 ## Mind Memory Types
 
@@ -121,51 +185,36 @@ OBSERVE → DECIDE → ACT → MEASURE → LEARN → IMPROVE → (repeat)
 | Learnings | 4 (Identity) | High-confidence insights |
 | Meta | 4 (Identity) | Statistics, rankings |
 
-## Environment Requirements
+---
 
-- Python 3.11+
-- Vibeship Mind running at http://localhost:8080
-- aiohttp for async HTTP
+## Startup Requirements
 
-## Starting Mind
+| Service | Required | How |
+|---------|----------|-----|
+| Mind API | Yes | `start_mind_lite.bat` |
+| Spark Hooks | Auto | Already in `~/.claude/settings.json` |
+| MCP Server | Auto | Started by Claude Code |
+| Processor | Optional | `python processor.py --mode daemon` |
 
-```bash
-cd C:\Users\USER\Desktop\the-mind\vibeship-mind
-python src\mind\lite_tier.py
-```
+---
 
-Or use:
-```bash
-powershell -Command "Start-Process python -ArgumentList 'C:/Users/USER/Desktop/the-mind/vibeship-mind/src/mind/lite_tier.py' -WorkingDirectory 'C:/Users/USER/Desktop/the-mind/vibeship-mind'"
-```
+## Query Learnings
 
-## Key Files to Know
-
-| File | Purpose |
-|------|---------|
-| `lib/queue.py` | Event capture, must be < 10ms |
-| `lib/learner.py` | Pattern extraction logic |
-| `lib/mind_client.py` | Mind API wrapper |
-| `hooks/observe.py` | Main observation hook |
-| `processor.py` | Background learning engine |
-
-## Current Learnings in Mind
-
-Query with:
 ```bash
 curl -s -X POST http://localhost:8080/v1/memories/retrieve \
   -H "Content-Type: application/json" \
   -d '{"query":"LEARNING"}' | python -m json.tool
 ```
 
+---
+
 ## Continuation Prompt
 
-When starting a new session, use this context:
+When starting a new session:
 
-> "I'm continuing development of Spark, the ambient self-evolving intelligence layer.
-> Check docs/IMPLEMENTATION.md for current status and next steps.
-> Run `python setup.py status` to verify the system state.
-> Key priorities: MCP server, unit tests, skill evolution, meta-learning."
+> "I'm continuing development of Spark. Run `python spark_cli.py health` to verify all 21 components are healthy. Check `docs/IMPLEMENTATION.md` for complete status and `docs/FLOW.md` for system flow."
+
+---
 
 ## Important Notes
 
@@ -174,9 +223,24 @@ When starting a new session, use this context:
 3. **Queue is file-based** - At `~/.spark/queue/events.jsonl`
 4. **User-level install** - Works across all projects
 
-## Related Documentation
+---
 
-- `docs/PRD.md` - Full product requirements
-- `docs/ARCHITECTURE.md` - Detailed system design
-- `docs/IMPLEMENTATION.md` - Implementation status and plan
-- `docs/TESTING.md` - Test strategy and coverage
+## Documentation
+
+| Doc | Purpose |
+|-----|---------|
+| `docs/FLOW.md` | Complete data flow diagrams |
+| `docs/IMPLEMENTATION.md` | M1-M11 status, component details |
+| `docs/PRD.md` | Product requirements |
+| `docs/ARCHITECTURE.md` | System design |
+| `docs/TESTING.md` | Test strategy |
+
+---
+
+## Deferred Features
+
+| Feature | Reason |
+|---------|--------|
+| Cross-user learning sharing | Requires team infrastructure |
+| TypeScript MCP server | Python server works |
+| Periodic reflection scheduling | Can be added to processor |
