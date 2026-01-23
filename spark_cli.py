@@ -32,6 +32,9 @@ from lib.learning_transfer import LearningTransfer, LearningScope
 from lib.pattern_breeder import PatternBreeder, PopulationStats
 from lib.realtime_advisor import RealTimeAdvisor
 from lib.spark_mcp_server import SparkMCPServer
+from lib.skill_evolver import SkillEvolver, SkillUsage
+from lib.context_injector import ContextInjector
+from lib.orchestrator import AgentOrchestrator, AgentUsage
 from lib.spark_dashboard import SparkDashboard, DashboardView
 from lib.spark_debugger import SparkDebugger, DebugLevel
 from lib.spark_backup import SparkBackup, BackupType
@@ -182,8 +185,8 @@ def cmd_hooks():
 
 
 async def cmd_health():
-    """Comprehensive health check of all M1-M10 components."""
-    print("\n  M1-M10 Health Check")
+    """Comprehensive health check of all M1-M10 components (19 components)."""
+    print("\n  M1-M10 Health Check (19 Components)")
     print("  " + "-" * 50)
 
     results = {}
@@ -428,6 +431,72 @@ async def cmd_health():
     except Exception as e:
         print(f"       [FAIL] {e}")
         results["M8_SparkMCPServer"] = False
+
+    # M9: Skill Evolver
+    print("\n  [M9] Skill Evolver...")
+    try:
+        skill_evolver = SkillEvolver(mind)
+        # Create a skill-related event and track it
+        skill_event = SparkEvent(
+            event_type=EventType.POST_TOOL,
+            timestamp=1.0,
+            session_id="health_check",
+            data={"skill_id": "test_skill", "task_context": "health_check"},
+            tool_name="Skill"
+        )
+        skill_evolver.track_skill_usage(skill_event)
+        # Check that skill_stats dict is accessible
+        if hasattr(skill_evolver, 'skill_stats'):
+            print(f"       [OK] Skill tracking working")
+            print(f"           Tracked: {len(skill_evolver.skill_stats)} skills")
+            results["M9_SkillEvolver"] = True
+        else:
+            print("       [FAIL] Skill stats not accessible")
+            results["M9_SkillEvolver"] = False
+    except Exception as e:
+        print(f"       [FAIL] {e}")
+        results["M9_SkillEvolver"] = False
+
+    # M9: Context Injector
+    print("\n  [M9] Context Injector...")
+    try:
+        injector = ContextInjector(mind)
+        context = await injector.gather_context()
+        if context is not None:
+            print(f"       [OK] Context builder ready")
+            print(f"           Has content: {context.has_content}")
+            results["M9_ContextInjector"] = True
+        else:
+            print("       [FAIL] No context returned")
+            results["M9_ContextInjector"] = False
+    except Exception as e:
+        print(f"       [FAIL] {e}")
+        results["M9_ContextInjector"] = False
+
+    # M9: Agent Orchestrator
+    print("\n  [M9] Agent Orchestrator...")
+    try:
+        orchestrator = AgentOrchestrator(mind)
+        # Create an agent-related event and track it
+        agent_event = SparkEvent(
+            event_type=EventType.POST_TOOL,
+            timestamp=1.0,
+            session_id="health_check",
+            data={"subagent_type": "Explore", "description": "health_check test"},
+            tool_name="Task"
+        )
+        orchestrator.track_agent_usage(agent_event)
+        # Check that agent_stats dict is accessible
+        if hasattr(orchestrator, 'agent_stats'):
+            print(f"       [OK] Agent tracking working")
+            print(f"           Tracked: {len(orchestrator.agent_stats)} agents")
+            results["M9_AgentOrchestrator"] = True
+        else:
+            print("       [FAIL] Agent stats not accessible")
+            results["M9_AgentOrchestrator"] = False
+    except Exception as e:
+        print(f"       [FAIL] {e}")
+        results["M9_AgentOrchestrator"] = False
 
     # M10: Spark Dashboard
     print("\n  [M10] Spark Dashboard...")
