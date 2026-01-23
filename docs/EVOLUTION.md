@@ -55,6 +55,7 @@
 - **Auto-Improve** - Act on gaps automatically: create learnings, flag extractions, calibrate (`lib/auto_improve.py`)
 - **Self-Awareness Injection** - Session start now injects known gaps and struggling goal types
 - **Autonomous Evolution** - Daemon runs introspection every N cycles automatically (`processor.py`)
+- **Error Recovery Learning** - Learn "when X fails, try Y" from failure→success sequences
 - **Recursive Loop Complete** - Introspect -> Improve -> Inject -> Verify (runs without intervention)
 
 ---
@@ -77,6 +78,7 @@
 | Auto-improvement | 80% | Acts on gaps automatically |
 | Self-awareness injection | 90% | Known gaps injected at session start |
 | Autonomous evolution | 95% | Daemon runs introspect/improve every N cycles |
+| Error recovery learning | 85% | Learns "when X fails, try Y" patterns |
 
 ### Strong Patterns Learned
 
@@ -242,7 +244,7 @@ python spark_live.py advice
 
 ### Immediate (Next Session)
 1. **Expand goal classification** - More keywords, reduce "unknown" type
-2. **Error recovery learning** - Track failure->success sequences
+2. ~~**Error recovery learning**~~ - **DONE** - Track failure->success sequences
 3. **Confidence calibration** - Improve prediction accuracy over time
 
 ### Short-term (This Week)
