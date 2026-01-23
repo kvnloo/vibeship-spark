@@ -30,6 +30,8 @@ from lib.suggester import Suggester
 from lib.project_analyzer import ProjectAnalyzer, ProjectType
 from lib.learning_transfer import LearningTransfer, LearningScope
 from lib.pattern_breeder import PatternBreeder, PopulationStats
+from lib.realtime_advisor import RealTimeAdvisor
+from lib.spark_mcp_server import SparkMCPServer
 
 
 def print_banner():
@@ -177,8 +179,8 @@ def cmd_hooks():
 
 
 async def cmd_health():
-    """Comprehensive health check of all M1-M6 components."""
-    print("\n  M1-M6 Health Check")
+    """Comprehensive health check of all M1-M8 components."""
+    print("\n  M1-M8 Health Check")
     print("  " + "-" * 50)
 
     results = {}
@@ -384,6 +386,46 @@ async def cmd_health():
         print(f"       [FAIL] {e}")
         results["M7_PatternBreeder"] = False
 
+    # M8: RealTime Advisor
+    print("\n  [M8] RealTime Advisor...")
+    try:
+        advisor = RealTimeAdvisor()
+        # Test pre-tool warning detection
+        warning = advisor.pre_tool_check("Bash", {"command": "rm -rf /tmp/test"})
+        if warning and warning.severity == "error":
+            print(f"       [OK] Warning detection working")
+            # Test recovery suggestion
+            recovery = advisor.suggest_recovery("Read", "File not found: test.py")
+            if recovery and recovery.error_category == "not_found":
+                print(f"           Recovery suggestions: available")
+            results["M8_RealTimeAdvisor"] = True
+        else:
+            print("       [FAIL] Warning detection not working")
+            results["M8_RealTimeAdvisor"] = False
+    except Exception as e:
+        print(f"       [FAIL] {e}")
+        results["M8_RealTimeAdvisor"] = False
+
+    # M8: Spark MCP Server
+    print("\n  [M8] Spark MCP Server...")
+    try:
+        server = SparkMCPServer(mind_client=mind)
+        # Test tool definitions
+        tool_defs = server.get_tool_definitions()
+        if len(tool_defs) >= 7:
+            print(f"       [OK] {len(tool_defs)} tools defined")
+            # Test status tool
+            status_response = await server.tool_status({})
+            if status_response.success:
+                print(f"           Status: operational={status_response.data.get('is_operational', False)}")
+            results["M8_SparkMCPServer"] = True
+        else:
+            print(f"       [FAIL] Only {len(tool_defs)} tools (expected 7+)")
+            results["M8_SparkMCPServer"] = False
+    except Exception as e:
+        print(f"       [FAIL] {e}")
+        results["M8_SparkMCPServer"] = False
+
     # Summary
     print("\n  " + "=" * 50)
     passed = sum(1 for v in results.values() if v)
@@ -414,7 +456,7 @@ Commands:
   watch       Run daemon (continuous processing)
   clear       Clear the event queue
   hooks       Show hook installation status
-  health      Comprehensive M1-M6 health check
+  health      Comprehensive M1-M8 health check
         """
     )
 
