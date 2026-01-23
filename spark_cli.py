@@ -27,6 +27,8 @@ from lib.experiment_manager import ExperimentManager
 from lib.prompt_evolver import PromptEvolver
 from lib.meta_learner import MetaLearner
 from lib.suggester import Suggester
+from lib.project_analyzer import ProjectAnalyzer, ProjectType
+from lib.learning_transfer import LearningTransfer, LearningScope
 
 
 def print_banner():
@@ -174,8 +176,8 @@ def cmd_hooks():
 
 
 async def cmd_health():
-    """Comprehensive health check of all M1-M5 components."""
-    print("\n  M1-M5 Health Check")
+    """Comprehensive health check of all M1-M6 components."""
+    print("\n  M1-M6 Health Check")
     print("  " + "-" * 50)
 
     results = {}
@@ -314,6 +316,45 @@ async def cmd_health():
         print(f"       [FAIL] {e}")
         results["M5_ExperimentManager"] = False
 
+    # M6: Project Analyzer
+    print("\n  [M6] Project Analyzer...")
+    try:
+        analyzer = ProjectAnalyzer()
+        # Analyze current directory
+        fingerprint = analyzer.analyze(str(Path.cwd()))
+        print(f"       [OK] Detected: {fingerprint.project_type.value}, {fingerprint.primary_language or 'unknown'}")
+        if fingerprint.frameworks:
+            print(f"           Frameworks: {', '.join(fingerprint.frameworks[:3])}")
+        results["M6_ProjectAnalyzer"] = True
+    except Exception as e:
+        print(f"       [FAIL] {e}")
+        results["M6_ProjectAnalyzer"] = False
+
+    # M6: Learning Transfer
+    print("\n  [M6] Learning Transfer...")
+    try:
+        transfer = LearningTransfer(mind)
+        # Create a test learning
+        from lib.project_analyzer import ProjectFingerprint
+        test_fp = ProjectFingerprint(
+            project_path="/test",
+            project_type=ProjectType.API_SERVICE,
+            primary_language="python"
+        )
+        learning = transfer.annotate_learning(
+            learning_id="health_test",
+            content="TOOL_EFFECTIVENESS: Test learning",
+            source_fingerprint=test_fp,
+            metadata={"pattern_type": "tool_effectiveness"}
+        )
+        stats = transfer.get_stats()
+        print(f"       [OK] Created learning with scope: {learning.scope.value}")
+        print(f"           Total learnings: {stats['total_learnings']}")
+        results["M6_LearningTransfer"] = True
+    except Exception as e:
+        print(f"       [FAIL] {e}")
+        results["M6_LearningTransfer"] = False
+
     # Summary
     print("\n  " + "=" * 50)
     passed = sum(1 for v in results.values() if v)
@@ -344,7 +385,7 @@ Commands:
   watch       Run daemon (continuous processing)
   clear       Clear the event queue
   hooks       Show hook installation status
-  health      Comprehensive M1-M5 health check
+  health      Comprehensive M1-M6 health check
         """
     )
 
