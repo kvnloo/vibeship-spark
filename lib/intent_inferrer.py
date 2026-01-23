@@ -7,6 +7,9 @@ Since we can't read Claude's actual reasoning, we infer intent from:
 3. Recent context
 
 This is fast (< 5ms) and runs in the observe hook.
+
+Part of the Reasoning Tracker system - captures predictions to learn
+from the gap between expectation and reality.
 """
 
 from typing import Any, Dict, List, Optional, Tuple
