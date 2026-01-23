@@ -741,6 +741,7 @@ def main():
 Commands:
   status      Show current Spark status
   witness     Unified view of what's happening (recommended)
+  live        Live monitoring mode - continuous witness updates
   introspect  Self-analysis - what am I not learning?
   improve     Auto-improve - act on self-discovered gaps
   learn       Process pending events now
@@ -754,13 +755,15 @@ Commands:
     )
 
     parser.add_argument("command", nargs="?", default="status",
-                       choices=["status", "witness", "introspect", "improve", "calibration", "learn", "reflect", "learnings",
+                       choices=["status", "witness", "live", "introspect", "improve", "calibration", "learn", "reflect", "learnings",
                                "watch", "clear", "hooks", "health"],
                        help="Command to run")
-    parser.add_argument("--interval", type=int, default=15,
-                       help="Watch interval in seconds (default: 15)")
+    parser.add_argument("--interval", type=int, default=5,
+                       help="Interval in seconds (default: 5 for live, 15 for watch)")
     parser.add_argument("-v", "--verbose", action="store_true",
-                       help="Verbose output (for witness command)")
+                       help="Verbose output (for witness/live command)")
+    parser.add_argument("--live", action="store_true",
+                       help="Enable live mode for witness command")
 
     args = parser.parse_args()
 
@@ -769,7 +772,15 @@ Commands:
     if args.command == "status":
         asyncio.run(cmd_status())
     elif args.command == "witness":
-        cmd_witness(verbose=args.verbose)
+        if args.live:
+            # Live mode
+            from lib.witness import watch
+            watch(interval=args.interval, verbose=args.verbose)
+        else:
+            cmd_witness(verbose=args.verbose)
+    elif args.command == "live":
+        from lib.witness import watch
+        watch(interval=args.interval, verbose=args.verbose)
     elif args.command == "introspect":
         asyncio.run(cmd_introspect())
     elif args.command == "improve":
@@ -783,7 +794,9 @@ Commands:
     elif args.command == "learnings":
         asyncio.run(cmd_learnings())
     elif args.command == "watch":
-        asyncio.run(cmd_watch(args.interval))
+        # Use 15s default for daemon watch (different from 5s live default)
+        interval = args.interval if args.interval != 5 else 15
+        asyncio.run(cmd_watch(interval))
     elif args.command == "clear":
         cmd_clear()
     elif args.command == "hooks":

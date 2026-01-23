@@ -124,6 +124,18 @@ class SparkWitness:
         # Daemon
         self.register_system("daemon", self._observe_daemon)
 
+        # Tool Statistics (NEW)
+        self.register_system("tool_stats", self._observe_tool_stats)
+
+        # Learnings (NEW)
+        self.register_system("learnings", self._observe_learnings)
+
+        # Error Patterns (NEW)
+        self.register_system("error_patterns", self._observe_error_patterns)
+
+        # Processing Stats (NEW)
+        self.register_system("processing", self._observe_processing)
+
     def register_system(self, name: str, observer: Callable[[], SystemObservation]):
         """
         Register a new system to watch.
@@ -532,6 +544,226 @@ class SparkWitness:
                 message="Cannot check daemon status"
             )
 
+    def _observe_tool_stats(self) -> SystemObservation:
+        """Observe tool effectiveness patterns from Mind."""
+        import asyncio
+
+        async def get_tool_stats():
+            from .mind_client import MindClient
+            client = MindClient()
+            try:
+                # Query for tool effectiveness learnings
+                results = await client.retrieve("tool_effectiveness LEARNING", limit=50)
+                await client.close()
+                return results
+            except Exception as e:
+                await client.close()
+                return []
+
+        try:
+            loop = asyncio.new_event_loop()
+            results = loop.run_until_complete(get_tool_stats())
+            loop.close()
+
+            if not results:
+                return SystemObservation(
+                    system_name="tool_stats",
+                    health=SystemHealth.HEALTHY,
+                    metrics={"patterns": 0},
+                    message="No tool patterns yet (still learning)"
+                )
+
+            # Parse tool stats from learnings
+            tools = {}
+            for r in results:
+                content = r.get("content", "")
+                if "tool_effectiveness" in content.lower():
+                    # Extract tool name from content
+                    if "tool=" in content:
+                        tool = content.split("tool=")[1].split()[0].strip("',\"")
+                        tools[tool] = tools.get(tool, 0) + 1
+
+            if tools:
+                top_tools = sorted(tools.items(), key=lambda x: x[1], reverse=True)[:3]
+                tool_str = ", ".join(f"{t}({c})" for t, c in top_tools)
+                return SystemObservation(
+                    system_name="tool_stats",
+                    health=SystemHealth.HEALTHY,
+                    metrics={"patterns": len(results), "tools": tools},
+                    message=f"{len(results)} patterns: {tool_str}"
+                )
+
+            return SystemObservation(
+                system_name="tool_stats",
+                health=SystemHealth.HEALTHY,
+                metrics={"patterns": len(results)},
+                message=f"{len(results)} tool patterns stored"
+            )
+        except Exception as e:
+            return SystemObservation(
+                system_name="tool_stats",
+                health=SystemHealth.UNKNOWN,
+                metrics={},
+                message=f"Query failed: {str(e)[:30]}"
+            )
+
+    def _observe_learnings(self) -> SystemObservation:
+        """Observe overall learnings from Mind."""
+        import asyncio
+
+        async def get_learning_stats():
+            from .mind_client import MindClient
+            client = MindClient()
+            try:
+                results = await client.retrieve("LEARNING", limit=100)
+                await client.close()
+                return results
+            except:
+                await client.close()
+                return []
+
+        try:
+            loop = asyncio.new_event_loop()
+            results = loop.run_until_complete(get_learning_stats())
+            loop.close()
+
+            if not results:
+                return SystemObservation(
+                    system_name="learnings",
+                    health=SystemHealth.HEALTHY,
+                    metrics={"total": 0},
+                    message="No learnings yet"
+                )
+
+            # Categorize learnings by type
+            types = {}
+            for r in results:
+                content = r.get("content", "")
+                # Try to determine type
+                if "tool_effectiveness" in content.lower():
+                    types["tool"] = types.get("tool", 0) + 1
+                elif "error_category" in content.lower() or "error_recovery" in content.lower():
+                    types["error"] = types.get("error", 0) + 1
+                elif "goal_strategy" in content.lower():
+                    types["goal"] = types.get("goal", 0) + 1
+                elif "tool_sequence" in content.lower() or "parallel" in content.lower():
+                    types["sequence"] = types.get("sequence", 0) + 1
+                else:
+                    types["other"] = types.get("other", 0) + 1
+
+            # Format breakdown
+            breakdown = ", ".join(f"{k}:{v}" for k, v in sorted(types.items(), key=lambda x: x[1], reverse=True) if v > 0)
+
+            health = SystemHealth.HEALTHY
+            if len(results) < 10:
+                health = SystemHealth.DEGRADED  # Still learning
+
+            return SystemObservation(
+                system_name="learnings",
+                health=health,
+                metrics={"total": len(results), "types": types},
+                message=f"{len(results)} total [{breakdown}]"
+            )
+        except Exception as e:
+            return SystemObservation(
+                system_name="learnings",
+                health=SystemHealth.UNKNOWN,
+                metrics={},
+                message=f"Query failed: {str(e)[:30]}"
+            )
+
+    def _observe_error_patterns(self) -> SystemObservation:
+        """Observe error patterns and recovery strategies."""
+        import asyncio
+
+        async def get_error_patterns():
+            from .mind_client import MindClient
+            client = MindClient()
+            try:
+                results = await client.retrieve("error_category error_recovery LEARNING", limit=50)
+                await client.close()
+                return results
+            except:
+                await client.close()
+                return []
+
+        try:
+            loop = asyncio.new_event_loop()
+            results = loop.run_until_complete(get_error_patterns())
+            loop.close()
+
+            if not results:
+                return SystemObservation(
+                    system_name="error_patterns",
+                    health=SystemHealth.HEALTHY,
+                    metrics={"patterns": 0, "recoveries": 0},
+                    message="No error patterns (good! or still learning)"
+                )
+
+            # Count error categories vs recovery strategies
+            categories = 0
+            recoveries = 0
+            for r in results:
+                content = r.get("content", "").lower()
+                if "error_category" in content:
+                    categories += 1
+                if "recovery" in content or "fix" in content:
+                    recoveries += 1
+
+            return SystemObservation(
+                system_name="error_patterns",
+                health=SystemHealth.HEALTHY,
+                metrics={"patterns": categories, "recoveries": recoveries},
+                message=f"{categories} error types, {recoveries} recovery strategies"
+            )
+        except Exception as e:
+            return SystemObservation(
+                system_name="error_patterns",
+                health=SystemHealth.UNKNOWN,
+                metrics={},
+                message=f"Query failed: {str(e)[:30]}"
+            )
+
+    def _observe_processing(self) -> SystemObservation:
+        """Observe processing statistics."""
+        stats_file = Path.home() / ".spark" / "processing_stats.json"
+        queue_file = Path.home() / ".spark" / "queue" / "events.jsonl"
+
+        try:
+            # Count queue events
+            queue_size = 0
+            if queue_file.exists():
+                lines = queue_file.read_text().strip().split("\n")
+                queue_size = len([l for l in lines if l.strip()])
+
+            # Check for processing stats
+            if stats_file.exists():
+                stats = json.loads(stats_file.read_text())
+                processed = stats.get("total_processed", 0)
+                last_run = stats.get("last_run", "never")
+
+                return SystemObservation(
+                    system_name="processing",
+                    health=SystemHealth.HEALTHY,
+                    metrics={"queue": queue_size, "processed": processed, "last_run": last_run},
+                    message=f"Queue: {queue_size}, Processed: {processed}"
+                )
+
+            # No stats file yet
+            return SystemObservation(
+                system_name="processing",
+                health=SystemHealth.HEALTHY if queue_size < 50 else SystemHealth.DEGRADED,
+                metrics={"queue": queue_size, "processed": 0},
+                message=f"Queue: {queue_size}, Processed: 0 (processor not yet run)"
+            )
+        except Exception as e:
+            return SystemObservation(
+                system_name="processing",
+                health=SystemHealth.UNKNOWN,
+                metrics={},
+                message=f"Check failed: {str(e)[:30]}"
+            )
+
     # ===== Helpers =====
 
     def _get_active_goal(self) -> Optional[dict]:
@@ -599,13 +831,88 @@ def witness() -> str:
     return w.explain()
 
 
+def watch(interval: int = 5, verbose: bool = False):
+    """
+    Live monitoring mode - continuously watch all systems.
+
+    Args:
+        interval: Seconds between updates
+        verbose: Show detailed system status
+    """
+    import os
+    import sys
+
+    w = SparkWitness()
+    iteration = 0
+
+    print(f"[LIVE] Watching Spark (Ctrl+C to stop, interval={interval}s)")
+    print("=" * 60)
+
+    try:
+        while True:
+            iteration += 1
+
+            # Clear screen (platform-specific)
+            os.system('cls' if os.name == 'nt' else 'clear')
+
+            # Header
+            print(f"[LIVE] Spark Witness | Iteration {iteration} | {datetime.now().strftime('%H:%M:%S')}")
+            print("=" * 60)
+
+            # Get current state
+            snapshot = w.observe()
+
+            # Show explanation
+            print(w.explain(verbose=verbose))
+
+            # Show delta from last observation
+            if len(w.observation_history) > 1:
+                prev = w.observation_history[-2]
+                curr = w.observation_history[-1]
+
+                deltas = []
+                if curr.recent_events != prev.recent_events:
+                    diff = curr.recent_events - prev.recent_events
+                    deltas.append(f"Events: {'+' if diff > 0 else ''}{diff}")
+                if curr.learnings_count != prev.learnings_count:
+                    diff = curr.learnings_count - prev.learnings_count
+                    deltas.append(f"Learnings: {'+' if diff > 0 else ''}{diff}")
+
+                if deltas:
+                    print("\n" + "-" * 50)
+                    print(f"Delta: {', '.join(deltas)}")
+
+            # Footer
+            print("\n" + "=" * 60)
+            print(f"[LIVE] Next update in {interval}s... (Ctrl+C to stop)")
+
+            time.sleep(interval)
+
+    except KeyboardInterrupt:
+        print("\n\n[LIVE] Stopped watching.")
+        sys.exit(0)
+
+
 if __name__ == "__main__":
     # CLI usage
     import sys
 
-    w = SparkWitness()
+    args = sys.argv[1:]
 
-    if len(sys.argv) > 1 and sys.argv[1] == "-v":
+    if "--live" in args or "-l" in args:
+        # Live mode
+        verbose = "-v" in args or "--verbose" in args
+        interval = 5
+        for i, arg in enumerate(args):
+            if arg in ("--interval", "-i") and i + 1 < len(args):
+                try:
+                    interval = int(args[i + 1])
+                except ValueError:
+                    pass
+        watch(interval=interval, verbose=verbose)
+    elif "-v" in args or "--verbose" in args:
+        w = SparkWitness()
         print(w.explain(verbose=True))
     else:
+        w = SparkWitness()
         print(w.explain())
