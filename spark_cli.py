@@ -743,6 +743,7 @@ Commands:
   witness     Unified view of what's happening (recommended)
   live        Live monitoring mode - continuous witness updates
   report      Generate learning intelligence report
+  doctor      Self-healing - diagnose and fix issues
   introspect  Self-analysis - what am I not learning?
   improve     Auto-improve - act on self-discovered gaps
   learn       Process pending events now
@@ -756,7 +757,7 @@ Commands:
     )
 
     parser.add_argument("command", nargs="?", default="status",
-                       choices=["status", "witness", "live", "report", "introspect", "improve", "calibration", "learn", "reflect", "learnings",
+                       choices=["status", "witness", "live", "report", "doctor", "introspect", "improve", "calibration", "learn", "reflect", "learnings",
                                "watch", "clear", "hooks", "health"],
                        help="Command to run")
     parser.add_argument("--interval", type=int, default=5,
@@ -768,6 +769,10 @@ Commands:
     parser.add_argument("-o", "--output", help="Output file for report command")
     parser.add_argument("--detailed", action="store_true",
                        help="Include detailed learnings in report")
+    parser.add_argument("--auto", action="store_true",
+                       help="Auto-apply fixes without prompting (for doctor command)")
+    parser.add_argument("--verify", action="store_true",
+                       help="Verify fixes after healing (for doctor command)")
 
     args = parser.parse_args()
 
@@ -799,6 +804,17 @@ Commands:
                 print(report)
             await gen.close()
         asyncio.run(run_report())
+    elif args.command == "doctor":
+        from spark_doctor import SparkDoctor
+        async def run_doctor():
+            doc = SparkDoctor()
+            await doc.diagnose()
+            await doc.heal(auto=args.auto)
+            if args.verify:
+                await doc.verify()
+            print(doc.generate_report())
+            await doc.close()
+        asyncio.run(run_doctor())
     elif args.command == "introspect":
         asyncio.run(cmd_introspect())
     elif args.command == "improve":
