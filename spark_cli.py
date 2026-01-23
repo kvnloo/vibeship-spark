@@ -35,6 +35,7 @@ from lib.spark_mcp_server import SparkMCPServer
 from lib.skill_evolver import SkillEvolver, SkillUsage
 from lib.context_injector import ContextInjector
 from lib.orchestrator import AgentOrchestrator, AgentUsage
+from lib.conflict_resolver import ConflictResolver, ResolutionStrategy
 from lib.spark_dashboard import SparkDashboard, DashboardView
 from lib.spark_debugger import SparkDebugger, DebugLevel
 from lib.spark_backup import SparkBackup, BackupType
@@ -185,8 +186,8 @@ def cmd_hooks():
 
 
 async def cmd_health():
-    """Comprehensive health check of all M1-M10 components (19 components)."""
-    print("\n  M1-M10 Health Check (19 Components)")
+    """Comprehensive health check of all M1-M11 components (20 components)."""
+    print("\n  M1-M11 Health Check (20 Components)")
     print("  " + "-" * 50)
 
     results = {}
@@ -551,6 +552,47 @@ async def cmd_health():
         print(f"       [FAIL] {e}")
         results["M10_SparkBackup"] = False
 
+    # M11: Conflict Resolver
+    print("\n  [M11] Conflict Resolver...")
+    try:
+        from lib.prompt_evolver import PromptPattern
+        resolver = ConflictResolver(experiment_manager=exp_mgr, decay_rate_days=30.0)
+        # Create test patterns that conflict
+        test_pattern_a = PromptPattern(
+            pattern_id="health_a",
+            pattern_type="tool_effectiveness",
+            description="Test pattern A",
+            trigger_conditions={"tool_name": "HealthCheck"},
+            approach="Approach A",
+            total_uses=50,
+            success_count=45,
+            failure_count=5
+        )
+        test_pattern_b = PromptPattern(
+            pattern_id="health_b",
+            pattern_type="tool_effectiveness",
+            description="Test pattern B",
+            trigger_conditions={"tool_name": "HealthCheck"},
+            approach="Approach B",
+            total_uses=30,
+            success_count=15,
+            failure_count=15
+        )
+        conflicts = resolver.detect_conflicts([test_pattern_a, test_pattern_b])
+        if len(conflicts) >= 1:
+            # Resolve the conflict
+            resolved = resolver.resolve([test_pattern_a, test_pattern_b])
+            stats = resolver.get_stats()
+            print(f"       [OK] Conflict resolution working")
+            print(f"           Detected: {stats['total_conflicts_detected']}, Resolved: {stats['total_conflicts_resolved']}")
+            results["M11_ConflictResolver"] = True
+        else:
+            print("       [FAIL] Conflict detection not working")
+            results["M11_ConflictResolver"] = False
+    except Exception as e:
+        print(f"       [FAIL] {e}")
+        results["M11_ConflictResolver"] = False
+
     # Summary
     print("\n  " + "=" * 50)
     passed = sum(1 for v in results.values() if v)
@@ -581,7 +623,7 @@ Commands:
   watch       Run daemon (continuous processing)
   clear       Clear the event queue
   hooks       Show hook installation status
-  health      Comprehensive M1-M10 health check
+  health      Comprehensive M1-M11 health check
         """
     )
 

@@ -22,6 +22,7 @@ from .meta_learner import MetaLearner
 from .suggester import Suggester
 from .experiment_manager import ExperimentManager
 from .queue import SparkQueue
+from .conflict_resolver import ConflictResolver, ResolutionStrategy
 
 
 class DashboardView(Enum):
@@ -32,6 +33,8 @@ class DashboardView(Enum):
     LEARNINGS = "learnings"
     QUEUE = "queue"
     SESSION = "session"
+    CONFLICTS = "conflicts"
+    SETTINGS = "settings"
 
 
 @dataclass
@@ -80,7 +83,8 @@ class SparkDashboard:
         meta_learner: Optional[MetaLearner] = None,
         suggester: Optional[Suggester] = None,
         experiment_manager: Optional[ExperimentManager] = None,
-        queue: Optional[SparkQueue] = None
+        queue: Optional[SparkQueue] = None,
+        conflict_resolver: Optional[ConflictResolver] = None
     ):
         self.mind = mind_client
         self.learner = learner
@@ -89,6 +93,15 @@ class SparkDashboard:
         self.suggester = suggester
         self.experiment_manager = experiment_manager
         self.queue = queue or SparkQueue()
+        self.conflict_resolver = conflict_resolver
+
+        # Settings (configurable via dashboard)
+        self.settings = {
+            "decay_rate_days": 30.0,
+            "min_confidence_threshold": 0.7,
+            "experiment_min_samples": 10,
+            "auto_resolve_conflicts": True
+        }
 
         self.state = DashboardState(
             current_view=DashboardView.OVERVIEW,
@@ -103,6 +116,8 @@ class SparkDashboard:
             DashboardView.LEARNINGS: self._render_learnings,
             DashboardView.QUEUE: self._render_queue,
             DashboardView.SESSION: self._render_session,
+            DashboardView.CONFLICTS: self._render_conflicts,
+            DashboardView.SETTINGS: self._render_settings,
         }
 
     async def refresh(self, view: Optional[DashboardView] = None) -> ViewData:
@@ -130,6 +145,10 @@ class SparkDashboard:
             data = await self._collect_queue_data()
         elif target_view == DashboardView.SESSION:
             data = await self._collect_session_data()
+        elif target_view == DashboardView.CONFLICTS:
+            data = await self._collect_conflicts_data()
+        elif target_view == DashboardView.SETTINGS:
+            data = await self._collect_settings_data()
         else:
             data = {"error": "Unknown view"}
 
@@ -735,3 +754,203 @@ class SparkDashboard:
             "is_live": self.state.is_live,
             "refresh_interval": self.state.refresh_interval
         }
+
+    # ========== Conflicts View ==========
+
+    async def _collect_conflicts_data(self) -> Dict[str, Any]:
+        """Collect conflicts data."""
+        data = {
+            "active_conflicts": [],
+            "resolution_history": [],
+            "stats": {},
+            "_warnings": [],
+            "_highlights": []
+        }
+
+        if self.conflict_resolver:
+            # Get active conflicts
+            active = self.conflict_resolver.get_active_conflicts()
+            data["active_conflicts"] = [
+                {
+                    "id": c.conflict_id,
+                    "type": c.conflict_type,
+                    "pattern_a": c.learning_a.pattern_id,
+                    "pattern_b": c.learning_b.pattern_id,
+                    "age_seconds": c.age_seconds
+                }
+                for c in active
+            ]
+
+            # Get resolution history
+            history = self.conflict_resolver.get_resolution_history(limit=10)
+            data["resolution_history"] = [
+                {
+                    "id": r.conflict_id,
+                    "resolution": r.resolution.value,
+                    "winner": r.winner_id,
+                    "reason": r.resolution_reason
+                }
+                for r in history
+            ]
+
+            # Get stats
+            data["stats"] = self.conflict_resolver.get_stats()
+
+            # Add warnings/highlights
+            if len(active) > 5:
+                data["_warnings"].append(f"{len(active)} unresolved conflicts")
+            if data["stats"].get("resolution_success_rate", 0) > 0.8:
+                data["_highlights"].append("High resolution success rate")
+        else:
+            data["_warnings"].append("Conflict resolver not configured")
+
+        return data
+
+    def _render_conflicts(self, data: ViewData) -> str:
+        """Render conflicts view."""
+        lines = [
+            self._box_top(" CONFLICTS "),
+            self._box_line(""),
+            self._box_line(f"  Last updated: {data.updated_at.strftime('%H:%M:%S')}"),
+            self._box_line(""),
+        ]
+
+        content = data.content
+        stats = content.get("stats", {})
+
+        # Statistics
+        lines.append(self._box_line("  STATISTICS"))
+        lines.append(self._box_line("  " + "-" * 40))
+        lines.append(self._box_line(f"  Total Detected: {stats.get('total_conflicts_detected', 0)}"))
+        lines.append(self._box_line(f"  Total Resolved: {stats.get('total_conflicts_resolved', 0)}"))
+        lines.append(self._box_line(f"  Active: {stats.get('active_conflicts', 0)}"))
+        lines.append(self._box_line(f"  Success Rate: {stats.get('resolution_success_rate', 0):.0%}"))
+        lines.append(self._box_line(f"  Decay Rate: {stats.get('decay_rate_days', 30)} days"))
+        lines.append(self._box_line(""))
+
+        # Active conflicts
+        active = content.get("active_conflicts", [])
+        if active:
+            lines.append(self._box_line("  ACTIVE CONFLICTS"))
+            lines.append(self._box_line("  " + "-" * 40))
+            for c in active[:5]:
+                age = self._humanize_seconds(c.get("age_seconds", 0))
+                lines.append(self._box_line(f"  [{c['type']}] {c['pattern_a'][:15]} vs {c['pattern_b'][:15]} ({age})"))
+        else:
+            lines.append(self._box_line("  No active conflicts"))
+
+        lines.append(self._box_line(""))
+
+        # Resolution history
+        history = content.get("resolution_history", [])
+        if history:
+            lines.append(self._box_line("  RECENT RESOLUTIONS"))
+            lines.append(self._box_line("  " + "-" * 40))
+            for r in history[:5]:
+                strategy = r.get("resolution", "unknown")
+                winner = r.get("winner", "N/A")
+                lines.append(self._box_line(f"  [{strategy}] Winner: {winner[:20]}"))
+
+        lines.extend(self._render_alerts(data))
+        lines.append(self._box_bottom())
+
+        return "\n".join(lines)
+
+    # ========== Settings View ==========
+
+    async def _collect_settings_data(self) -> Dict[str, Any]:
+        """Collect settings data."""
+        data = {
+            "current_settings": self.settings.copy(),
+            "resolver_settings": {},
+            "_warnings": [],
+            "_highlights": []
+        }
+
+        if self.conflict_resolver:
+            data["resolver_settings"] = {
+                "decay_rate_days": self.conflict_resolver.decay_rate_days,
+                "score_win_threshold": self.conflict_resolver.SCORE_WIN_THRESHOLD,
+                "min_samples_full_weight": self.conflict_resolver.MIN_SAMPLES_FULL_WEIGHT,
+                "experiment_min_samples": self.conflict_resolver.EXPERIMENT_MIN_SAMPLES
+            }
+
+        return data
+
+    def _render_settings(self, data: ViewData) -> str:
+        """Render settings view."""
+        lines = [
+            self._box_top(" SETTINGS "),
+            self._box_line(""),
+            self._box_line(f"  Last updated: {data.updated_at.strftime('%H:%M:%S')}"),
+            self._box_line(""),
+        ]
+
+        content = data.content
+        settings = content.get("current_settings", {})
+        resolver = content.get("resolver_settings", {})
+
+        # Dashboard settings
+        lines.append(self._box_line("  DASHBOARD SETTINGS"))
+        lines.append(self._box_line("  " + "-" * 40))
+        for key, value in settings.items():
+            lines.append(self._box_line(f"  {key}: {value}"))
+        lines.append(self._box_line(""))
+
+        # Resolver settings
+        if resolver:
+            lines.append(self._box_line("  CONFLICT RESOLVER SETTINGS"))
+            lines.append(self._box_line("  " + "-" * 40))
+            lines.append(self._box_line(f"  Decay Rate: {resolver.get('decay_rate_days', 30)} days"))
+            lines.append(self._box_line(f"  Score Win Threshold: {resolver.get('score_win_threshold', 1.5)}x"))
+            lines.append(self._box_line(f"  Min Samples for Full Weight: {resolver.get('min_samples_full_weight', 20)}"))
+            lines.append(self._box_line(f"  Experiment Min Samples: {resolver.get('experiment_min_samples', 10)}"))
+
+        lines.append(self._box_line(""))
+        lines.append(self._box_line("  Use set_setting() to modify"))
+        lines.extend(self._render_alerts(data))
+        lines.append(self._box_bottom())
+
+        return "\n".join(lines)
+
+    def set_setting(self, key: str, value: Any) -> bool:
+        """
+        Set a dashboard setting.
+
+        Args:
+            key: Setting key
+            value: New value
+
+        Returns:
+            True if setting was updated
+        """
+        if key in self.settings:
+            self.settings[key] = value
+
+            # Apply to conflict resolver if applicable
+            if key == "decay_rate_days" and self.conflict_resolver:
+                self.conflict_resolver.set_decay_rate(float(value))
+
+            return True
+        return False
+
+    def get_setting(self, key: str) -> Any:
+        """Get a dashboard setting."""
+        return self.settings.get(key)
+
+    def set_decay_rate(self, days: float) -> bool:
+        """
+        Set the decay rate for pattern aging.
+
+        Args:
+            days: Half-life in days
+
+        Returns:
+            True if setting was applied
+        """
+        if days > 0:
+            self.settings["decay_rate_days"] = days
+            if self.conflict_resolver:
+                self.conflict_resolver.set_decay_rate(days)
+            return True
+        return False
