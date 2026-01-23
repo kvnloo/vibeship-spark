@@ -34,6 +34,7 @@ from lib.suggester import Suggester
 from lib.injection_tracker import InjectionTracker
 from lib.experiment_manager import ExperimentManager
 from lib.auto_improve import SparkAutoImprove
+from lib.reasoning_tracker import ReasoningTracker
 
 
 # Configure logging
@@ -65,6 +66,8 @@ class SparkProcessor:
         # M5 Feedback Loop components
         self.injection_tracker = InjectionTracker(self.mind)
         self.experiment_manager = ExperimentManager(self.mind)
+        # Confidence calibration
+        self.reasoning_tracker = ReasoningTracker(self.mind)
         self.running = False
         self.processed_count = 0
         self.patterns_found = 0
@@ -92,11 +95,14 @@ class SparkProcessor:
             await self.prompt_evolver.load_existing_data()
             await self.meta_learner.load_existing_data()
             await self.suggester.load_suggestions_from_mind()
+            # Load calibration data
+            calibration_loaded = await self.reasoning_tracker.load_calibration_from_mind()
             log.info(f"Loaded {len(self.learner.tool_weights)} tool weights, "
                      f"{len(self.skill_evolver.skill_stats)} skill stats, "
                      f"{len(self.orchestrator.agent_stats)} agent stats, "
                      f"{len(self.prompt_evolver.patterns)} prompt patterns, "
-                     f"{len(self.suggester.suggestions)} suggestions")
+                     f"{len(self.suggester.suggestions)} suggestions, "
+                     f"{calibration_loaded} calibration factors")
         else:
             log.warning("Mind not available - will retry on next cycle")
 
@@ -298,6 +304,14 @@ class SparkProcessor:
             else:
                 log.info("No gaps found - system is healthy")
                 self.last_improvement_count = 0
+
+            # Save confidence calibration
+            self.reasoning_tracker.update_calibration_factors()
+            if self.reasoning_tracker.calibration_factors:
+                saved = await self.reasoning_tracker.save_calibration_to_mind()
+                if saved:
+                    log.info(f"Calibration saved: {len(self.reasoning_tracker.calibration_factors)} tools")
+                    log.info(self.reasoning_tracker.get_calibration_summary())
 
         except Exception as e:
             log.error(f"Self-improvement error: {e}")

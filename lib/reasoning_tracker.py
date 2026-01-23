@@ -84,6 +84,10 @@ class ReasoningTracker:
         self.confidence_calibration: Dict[str, List[Tuple[float, bool]]] = {}
         # tool -> [(predicted_confidence, actual_success), ...]
 
+        # Calibration factors (learned adjustments)
+        # tool -> calibration_factor (multiply raw confidence by this)
+        self.calibration_factors: Dict[str, float] = {}
+
     def record_prediction(
         self,
         session_id: str,
@@ -455,6 +459,165 @@ class ReasoningTracker:
             "patterns_found": len(self.patterns),
             "tools_tracked": len(self.confidence_calibration)
         }
+
+    def get_calibrated_confidence(self, tool_name: str, raw_confidence: float) -> float:
+        """
+        Get calibrated confidence for a tool.
+
+        Adjusts raw confidence based on historical accuracy.
+        If we're historically overconfident with a tool, this returns lower confidence.
+        """
+        # Check if we have a calibration factor
+        if tool_name in self.calibration_factors:
+            factor = self.calibration_factors[tool_name]
+            calibrated = raw_confidence * factor
+            # Clamp to valid range
+            return max(0.1, min(0.99, calibrated))
+
+        # Fall back to computing from raw data
+        if tool_name not in self.confidence_calibration:
+            return raw_confidence
+
+        data = self.confidence_calibration[tool_name]
+        if len(data) < 5:
+            return raw_confidence  # Not enough data
+
+        # Calculate actual success rate
+        actual_success_rate = sum(s for _, s in data) / len(data)
+        avg_confidence = sum(c for c, _ in data) / len(data)
+
+        if avg_confidence == 0:
+            return raw_confidence
+
+        # Calibration factor: actual / predicted
+        factor = actual_success_rate / avg_confidence
+        # Clamp factor to reasonable range (0.5 to 1.5)
+        factor = max(0.5, min(1.5, factor))
+
+        calibrated = raw_confidence * factor
+        return max(0.1, min(0.99, calibrated))
+
+    def update_calibration_factors(self):
+        """
+        Update calibration factors from accumulated data.
+
+        Call this periodically to update the calibration model.
+        """
+        for tool, data in self.confidence_calibration.items():
+            if len(data) < 5:
+                continue
+
+            actual_success_rate = sum(s for _, s in data) / len(data)
+            avg_confidence = sum(c for c, _ in data) / len(data)
+
+            if avg_confidence > 0:
+                factor = actual_success_rate / avg_confidence
+                # Clamp to reasonable range
+                self.calibration_factors[tool] = max(0.5, min(1.5, factor))
+
+    async def save_calibration_to_mind(self) -> bool:
+        """
+        Save calibration factors to Mind for persistence.
+
+        Returns True if saved successfully.
+        """
+        if not await self.mind.is_available():
+            return False
+
+        # Update factors from current data
+        self.update_calibration_factors()
+
+        if not self.calibration_factors:
+            return False
+
+        # Create a summary of calibration
+        calibration_summary = []
+        for tool, factor in self.calibration_factors.items():
+            if tool in self.confidence_calibration:
+                data = self.confidence_calibration[tool]
+                actual_rate = sum(s for _, s in data) / len(data) if data else 0
+                avg_conf = sum(c for c, _ in data) / len(data) if data else 0
+
+                direction = "overconfident" if factor < 0.9 else "underconfident" if factor > 1.1 else "well-calibrated"
+                calibration_summary.append(
+                    f"{tool}: {direction} (factor={factor:.2f}, actual={actual_rate:.0%}, predicted={avg_conf:.0%})"
+                )
+
+        content = f"CALIBRATION: Confidence calibration factors updated.\n" + "\n".join(calibration_summary)
+
+        memory = Memory(
+            content=content,
+            temporal_level=TemporalLevel.IDENTITY,
+            salience=0.8,
+            content_type=ContentType.REFLECTION,
+            metadata={
+                "type": "calibration",
+                "calibration_factors": self.calibration_factors,
+                "tools_calibrated": list(self.calibration_factors.keys())
+            }
+        )
+
+        result = await self.mind.store(memory)
+        return result is not None
+
+    async def load_calibration_from_mind(self) -> int:
+        """
+        Load calibration factors from Mind.
+
+        Returns number of tools with calibration loaded.
+        """
+        if not await self.mind.is_available():
+            return 0
+
+        # Query for calibration memories - use simple query, filter by content
+        calibrations = await self.mind.retrieve(
+            query="CALIBRATION",
+            limit=10
+        )
+
+        loaded = 0
+        for cal in calibrations:
+            # Try metadata first
+            metadata = cal.get("metadata", {})
+            if metadata.get("type") == "calibration":
+                factors = metadata.get("calibration_factors", {})
+                for tool, factor in factors.items():
+                    self.calibration_factors[tool] = factor
+                    loaded += 1
+                continue
+
+            # Fall back to parsing content
+            content = cal.get("content", "")
+            if "CALIBRATION:" in content and "factor=" in content:
+                import re
+                # Parse lines like: "Edit: overconfident (factor=0.67, actual=60%, predicted=90%)"
+                # Use [\w-]+ to match hyphenated words like "well-calibrated"
+                matches = re.findall(r'(\w+): [\w-]+ \(factor=([0-9.]+)', content)
+                for tool, factor_str in matches:
+                    try:
+                        self.calibration_factors[tool] = float(factor_str)
+                        loaded += 1
+                    except ValueError:
+                        pass
+
+        return loaded
+
+    def get_calibration_summary(self) -> str:
+        """Get human-readable calibration summary."""
+        if not self.calibration_factors:
+            return "No calibration data yet."
+
+        lines = ["Confidence Calibration:"]
+        for tool, factor in sorted(self.calibration_factors.items()):
+            if factor < 0.9:
+                status = "overconfident (reduce confidence)"
+            elif factor > 1.1:
+                status = "underconfident (increase confidence)"
+            else:
+                status = "well-calibrated"
+            lines.append(f"  {tool}: {factor:.2f}x - {status}")
+
+        return "\n".join(lines)
 
     async def close(self):
         """Close Mind client."""

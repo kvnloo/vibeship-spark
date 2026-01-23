@@ -206,6 +206,49 @@ async def cmd_improve():
     print(result)
 
 
+async def cmd_calibration():
+    """Show confidence calibration status."""
+    from lib.reasoning_tracker import ReasoningTracker
+
+    tracker = ReasoningTracker()
+
+    print("\n" + "=" * 50)
+    print("SPARK CONFIDENCE CALIBRATION")
+    print("=" * 50)
+
+    # Load from Mind
+    loaded = await tracker.load_calibration_from_mind()
+
+    if loaded > 0:
+        print(f"\nLoaded {loaded} calibration factors from Mind:\n")
+        print(tracker.get_calibration_summary())
+
+        # Show calibration report if we have data
+        report = tracker.get_calibration_report()
+        if report:
+            print("\n--- Detailed Report ---")
+            for tool, data in report.items():
+                print(f"\n{tool}:")
+                print(f"  Total predictions: {data['total_predictions']}")
+                print(f"  Avg confidence: {data['avg_confidence']:.0%}")
+                print(f"  Actual success: {data['actual_success_rate']:.0%}")
+                print(f"  Calibration gap: {data['calibration_gap']:.0%}")
+                if data['is_overconfident']:
+                    print("  Status: OVERCONFIDENT - reduce confidence")
+                elif data['is_underconfident']:
+                    print("  Status: UNDERCONFIDENT - increase confidence")
+                else:
+                    print("  Status: Well calibrated")
+    else:
+        print("\nNo calibration data stored yet.")
+        print("Calibration is learned as predictions are made and resolved.")
+        print("Run some sessions with predictions, then check again.")
+
+    print("\n" + "=" * 50)
+
+    await tracker.close()
+
+
 async def cmd_health():
     """Comprehensive health check of all M1-M11 components (21 components)."""
     print("\n  M1-M11 Health Check (21 Components)")
@@ -711,7 +754,7 @@ Commands:
     )
 
     parser.add_argument("command", nargs="?", default="status",
-                       choices=["status", "witness", "introspect", "improve", "learn", "reflect", "learnings",
+                       choices=["status", "witness", "introspect", "improve", "calibration", "learn", "reflect", "learnings",
                                "watch", "clear", "hooks", "health"],
                        help="Command to run")
     parser.add_argument("--interval", type=int, default=15,
@@ -731,6 +774,8 @@ Commands:
         asyncio.run(cmd_introspect())
     elif args.command == "improve":
         asyncio.run(cmd_improve())
+    elif args.command == "calibration":
+        asyncio.run(cmd_calibration())
     elif args.command == "learn":
         asyncio.run(cmd_learn())
     elif args.command == "reflect":

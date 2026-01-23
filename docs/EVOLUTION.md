@@ -56,6 +56,7 @@
 - **Self-Awareness Injection** - Session start now injects known gaps and struggling goal types
 - **Autonomous Evolution** - Daemon runs introspection every N cycles automatically (`processor.py`)
 - **Error Recovery Learning** - Learn "when X fails, try Y" from failure→success sequences
+- **Confidence Calibration** - Adjust predictions based on historical accuracy (`lib/reasoning_tracker.py`)
 - **Recursive Loop Complete** - Introspect -> Improve -> Inject -> Verify (runs without intervention)
 
 ---
@@ -79,6 +80,7 @@
 | Self-awareness injection | 90% | Known gaps injected at session start |
 | Autonomous evolution | 95% | Daemon runs introspect/improve every N cycles |
 | Error recovery learning | 85% | Learns "when X fails, try Y" patterns |
+| Confidence calibration | 85% | Adjusts predictions based on track record |
 
 ### Strong Patterns Learned
 
@@ -114,8 +116,8 @@ Tool Sequences:
 | Gap | Impact | Solution |
 |-----|--------|----------|
 | ~~No timing patterns~~ | ~~Can't learn "X is faster than Y"~~ | **FIXED** - slow_tool, fast_tool, timing_comparison patterns |
-| No error recovery learning | Can't learn "when X fails, try Y" | Track failure->success sequences |
-| No confidence calibration | Predictions don't improve over time | Track prediction accuracy history |
+| ~~No error recovery learning~~ | ~~Can't learn "when X fails, try Y"~~ | **FIXED** - Track failure->success sequences in learner.py |
+| ~~No confidence calibration~~ | ~~Predictions don't improve over time~~ | **FIXED** - Calibration factors in reasoning_tracker.py |
 | No parallel pattern learning | Can't learn which tools work together | Detect concurrent tool calls |
 
 ### Future (Lower Priority)
@@ -244,13 +246,13 @@ python spark_live.py advice
 
 ### Immediate (Next Session)
 1. **Expand goal classification** - More keywords, reduce "unknown" type
-2. ~~**Error recovery learning**~~ - **DONE** - Track failure->success sequences
-3. **Confidence calibration** - Improve prediction accuracy over time
+2. ~~**Error recovery learning**~~ - **DONE** - Track failure->success sequences in learner.py
+3. ~~**Confidence calibration**~~ - **DONE** - Calibration factors in reasoning_tracker.py
 
 ### Short-term (This Week)
 1. **Parallel pattern learning** - Detect concurrent tool calls
 2. **Fix test failures** - Update tests for new tuple return format
-3. **Periodic introspection** - Auto-run introspect on processor schedule
+3. ~~**Periodic introspection**~~ - **DONE** - Daemon runs introspect every N cycles
 
 ### Medium-term (This Month)
 1. **Self-testing framework** - Automated validation
@@ -281,6 +283,7 @@ python spark_live.py advice
 - Recursive self-improvement works: introspect -> improve -> inject -> verify
 - Mind API caps at ~100 results; query specific types instead of generic "LEARNING"
 - Self-awareness at session start helps Claude help Spark improve
+- Mind Lite queries: use simple single-word queries, complex queries return 0 results
 
 ---
 
@@ -290,9 +293,9 @@ Use this after restarting Claude Code:
 
 ```
 I'm continuing Spark's self-evolution. Last session completed:
-1. Made Spark truly autonomous - daemon now runs introspection every N cycles
-2. Recursive self-improvement works without human intervention
-3. processor.py --mode daemon --introspect-every 10 runs the full loop
+1. Autonomous evolution - daemon runs introspection every N cycles
+2. Error recovery learning - learns "when X fails, try Y" patterns
+3. Confidence calibration - adjusts predictions based on historical accuracy
 
 To verify: Run `python spark_cli.py health` - should show 21/21 healthy
 
@@ -301,16 +304,18 @@ Key commands:
 - `python spark_cli.py witness` - Unified view of all systems
 - `python spark_cli.py introspect` - Manual gap analysis
 - `python spark_cli.py improve` - Manual improvement
+- `python spark_cli.py calibration` - View confidence calibration factors
 
 Spark is now self-evolving. While the daemon runs, it:
 1. Processes events → extracts patterns → stores learnings
 2. Every 10 cycles: introspects → finds gaps → auto-improves
 3. Session start: injects known gaps so Claude can help address them
+4. Calibrates confidence based on prediction accuracy over time
 
 Next priorities from docs/EVOLUTION.md:
 - Expand goal classification (reduce "unknown" type)
-- Error recovery learning (track failure->success sequences)
-- Confidence calibration (improve prediction accuracy)
+- Parallel pattern learning (detect concurrent tool calls)
+- Fix test failures (update for new tuple return format)
 ```
 
 ---
