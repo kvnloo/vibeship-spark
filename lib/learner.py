@@ -36,6 +36,15 @@ class Pattern:
 
 
 @dataclass
+class ErrorInfo:
+    """Information about an error occurrence."""
+    category: str
+    suggested_fix: Optional[str]
+    count: int = 1
+    recovered: int = 0  # How many times we recovered from this error
+
+
+@dataclass
 class ToolStats:
     """Statistics for a tool."""
     name: str
@@ -44,6 +53,7 @@ class ToolStats:
     failures: int = 0
     total_duration_ms: float = 0.0
     error_types: Dict[str, int] = field(default_factory=dict)
+    error_details: Dict[str, ErrorInfo] = field(default_factory=dict)  # category -> ErrorInfo
 
     @property
     def success_rate(self) -> float:
@@ -136,31 +146,123 @@ class SparkLearner:
 
         if success:
             stats.successes += 1
+            # Check if this success followed a failure (recovery)
+            self._check_recovery(event)
         else:
             stats.failures += 1
             error = event.error or "unknown"
-            error_type = self._categorize_error(error)
-            stats.error_types[error_type] = stats.error_types.get(error_type, 0) + 1
+            error_category, suggested_fix = self._categorize_error(error)
+            stats.error_types[error_category] = stats.error_types.get(error_category, 0) + 1
+
+            # Store detailed error info
+            if error_category not in stats.error_details:
+                stats.error_details[error_category] = ErrorInfo(
+                    category=error_category,
+                    suggested_fix=suggested_fix
+                )
+            else:
+                stats.error_details[error_category].count += 1
+
+            # Track this failure for recovery detection
+            self._last_failure = {
+                "tool": tool_name,
+                "category": error_category,
+                "timestamp": event.timestamp,
+                "session_id": event.session_id
+            }
 
         if event.duration_ms:
             stats.total_duration_ms += event.duration_ms
 
-    def _categorize_error(self, error: str) -> str:
-        """Categorize an error message into a type."""
+    def _check_recovery(self, success_event: SparkEvent):
+        """Check if this success recovered from a previous failure."""
+        if not hasattr(self, "_last_failure") or self._last_failure is None:
+            return
+
+        last = self._last_failure
+        # Same session, same tool, within reasonable time = recovery
+        if (last["session_id"] == success_event.session_id and
+            last["tool"] == success_event.tool_name):
+            # Mark as recovered
+            tool_stats = self.tool_stats.get(last["tool"])
+            if tool_stats and last["category"] in tool_stats.error_details:
+                tool_stats.error_details[last["category"]].recovered += 1
+
+            # Track recovery pattern
+            if not hasattr(self, "_recovery_patterns"):
+                self._recovery_patterns = []
+            self._recovery_patterns.append({
+                "tool": last["tool"],
+                "error_category": last["category"],
+                "recovered": True
+            })
+
+        self._last_failure = None
+
+    def _categorize_error(self, error: str) -> Tuple[str, Optional[str]]:
+        """
+        Categorize an error message and extract a suggested fix.
+
+        Returns: (error_category, suggested_fix)
+        """
         error_lower = error.lower()
 
+        # Windows path issues
+        if "\\users\\" in error_lower or "c:\\" in error_lower.replace("\\\\", "\\"):
+            if "not found" in error_lower or "no such file" in error_lower:
+                return ("windows_path", "Use forward slashes (/) instead of backslashes")
+
+        # Path with spaces
+        if "can't open" in error_lower and " " in error:
+            return ("path_spaces", "Quote paths containing spaces")
+
+        # Encoding issues
+        if "unicode" in error_lower or "codec" in error_lower or "encode" in error_lower:
+            if "charmap" in error_lower or "cp1252" in error_lower:
+                return ("windows_encoding", "Use ASCII characters or set UTF-8 encoding")
+            return ("encoding_error", "Check file encoding, consider UTF-8")
+
+        # File not found
         if "not found" in error_lower or "no such file" in error_lower:
-            return "file_not_found"
-        elif "permission" in error_lower:
-            return "permission_denied"
-        elif "timeout" in error_lower:
-            return "timeout"
-        elif "not unique" in error_lower or "old_string" in error_lower:
-            return "edit_not_unique"
-        elif "syntax" in error_lower:
-            return "syntax_error"
-        else:
-            return "other"
+            return ("file_not_found", "Verify path exists with Read or ls first")
+
+        # Permission issues
+        if "permission" in error_lower or "access denied" in error_lower:
+            return ("permission_denied", "Check file permissions or run with elevated privileges")
+
+        # Timeout
+        if "timeout" in error_lower:
+            return ("timeout", "Reduce scope or increase timeout")
+
+        # Edit conflicts
+        if "not unique" in error_lower or "old_string" in error_lower:
+            return ("edit_not_unique", "Include more surrounding context to make old_string unique")
+
+        # Command not found
+        if "command not found" in error_lower or "not recognized" in error_lower:
+            return ("command_not_found", "Check command spelling or install required tool")
+
+        # Syntax errors
+        if "syntax" in error_lower or "parse" in error_lower:
+            return ("syntax_error", "Check syntax, look for missing quotes or brackets")
+
+        # JSON errors
+        if "json" in error_lower and ("decode" in error_lower or "parse" in error_lower):
+            return ("json_error", "Verify JSON format is valid")
+
+        # Connection errors
+        if "connection" in error_lower or "refused" in error_lower:
+            return ("connection_error", "Check if service is running on expected port")
+
+        # Git errors
+        if "git" in error_lower:
+            if "conflict" in error_lower:
+                return ("git_conflict", "Resolve merge conflicts before continuing")
+            if "not a git repository" in error_lower:
+                return ("not_git_repo", "Initialize git or navigate to correct directory")
+
+        # Generic/unknown
+        return ("other", None)
 
     async def _extract_patterns(self) -> List[Pattern]:
         """Extract patterns from accumulated events."""
@@ -184,25 +286,35 @@ class SparkLearner:
                 )
                 patterns.append(pattern)
 
-        # Pattern 2: Error avoidance patterns
+        # Pattern 2: Error patterns with fixes
         for tool_name, stats in self.tool_stats.items():
-            for error_type, count in stats.error_types.items():
-                if count >= 3:  # Recurring error
-                    avoidance = self._get_error_avoidance(tool_name, error_type)
-                    if avoidance:
-                        pattern = Pattern(
-                            pattern_type="error_avoidance",
-                            description=f"To avoid {error_type} with {tool_name}: {avoidance}",
-                            conditions=[f"tool={tool_name}", f"error_type={error_type}"],
-                            confidence=min(count / 10, 1.0),
-                            sample_size=count,
-                            metadata={
-                                "tool": tool_name,
-                                "error_type": error_type,
-                                "avoidance_strategy": avoidance
-                            }
-                        )
-                        patterns.append(pattern)
+            for error_category, error_info in stats.error_details.items():
+                if error_info.count >= 2:  # Recurring error (lowered threshold)
+                    fix = error_info.suggested_fix or self._get_error_avoidance(tool_name, error_category)
+                    recovery_rate = error_info.recovered / error_info.count if error_info.count > 0 else 0
+
+                    description = f"{tool_name} fails with {error_category}"
+                    if fix:
+                        description += f" -> Fix: {fix}"
+                    if recovery_rate > 0:
+                        description += f" (recovered {recovery_rate:.0%})"
+
+                    pattern = Pattern(
+                        pattern_type="error_category",
+                        description=description,
+                        conditions=[f"tool={tool_name}", f"error={error_category}"],
+                        confidence=min(error_info.count / 5, 1.0),
+                        sample_size=error_info.count,
+                        metadata={
+                            "tool": tool_name,
+                            "error_category": error_category,
+                            "suggested_fix": fix,
+                            "occurrences": error_info.count,
+                            "recoveries": error_info.recovered,
+                            "recovery_rate": recovery_rate
+                        }
+                    )
+                    patterns.append(pattern)
 
         # Pattern 3: Tool sequences that work well
         sequences = self._find_successful_sequences()

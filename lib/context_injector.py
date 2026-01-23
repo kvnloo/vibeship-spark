@@ -194,21 +194,28 @@ class ContextInjector:
         return recommendations
 
     async def _gather_error_warnings(self, project_name: Optional[str]) -> List[str]:
-        """Gather error avoidance patterns."""
-        # Use single-term query for better Mind search matching
-        learnings = await self.mind.retrieve(
-            query="ERROR_AVOIDANCE",
-            limit=4,
-            temporal_level=TemporalLevel.IDENTITY,
-            content_type=ContentType.REFLECTION
-        )
-
+        """Gather error patterns with fixes."""
         warnings = []
-        for l in learnings[:self.MAX_ITEMS_PER_CATEGORY]:
-            content = l.get("content", "")
-            formatted = self._format_error_warning(content)
-            if formatted:
-                warnings.append(formatted)
+
+        # Query for new ERROR_CATEGORY patterns (with fixes)
+        for query_term in ["ERROR_CATEGORY", "ERROR_AVOIDANCE"]:
+            learnings = await self.mind.retrieve(
+                query=query_term,
+                limit=5,
+                temporal_level=TemporalLevel.IDENTITY,
+                content_type=ContentType.REFLECTION
+            )
+
+            for l in learnings[:self.MAX_ITEMS_PER_CATEGORY]:
+                content = l.get("content", "")
+                formatted = self._format_error_warning(content)
+                if formatted and formatted not in warnings:
+                    warnings.append(formatted)
+                    if len(warnings) >= self.MAX_ITEMS_PER_CATEGORY:
+                        break
+
+            if len(warnings) >= self.MAX_ITEMS_PER_CATEGORY:
+                break
 
         return warnings
 
@@ -265,29 +272,34 @@ class ContextInjector:
         return None
 
     def _format_error_warning(self, content: str) -> Optional[str]:
-        """Format an error avoidance pattern."""
-        if "ERROR_AVOIDANCE" not in content:
-            return None
+        """Format an error pattern with fix."""
+        # Handle new ERROR_CATEGORY format
+        if "ERROR_CATEGORY" in content:
+            try:
+                if "]:" in content:
+                    # Format: "LEARNING [ERROR_CATEGORY]: Bash fails with windows_encoding -> Fix: ..."
+                    msg = content.split("]:")[1].strip()
+                    # Truncate if too long
+                    if len(msg) > 80:
+                        msg = msg[:77] + "..."
+                    return msg
+            except Exception:
+                pass
 
-        try:
-            # Look for actionable advice
-            if "To avoid" in content:
-                start = content.find("To avoid")
-                end = content.find(".", start)
-                if end > start:
-                    warning = content[start:end + 1]
-                    if len(warning) > 70:
-                        warning = warning[:67] + "..."
-                    return warning
+        # Handle old ERROR_AVOIDANCE format
+        if "ERROR_AVOIDANCE" in content:
+            try:
+                if "To avoid" in content:
+                    start = content.find("To avoid")
+                    end = content.find(".", start)
+                    if end > start:
+                        warning = content[start:end + 1]
+                        if len(warning) > 70:
+                            warning = warning[:67] + "..."
+                        return warning
+            except Exception:
+                pass
 
-            # Fallback: extract error type
-            if "errors with" in content.lower():
-                start = content.lower().find("errors with")
-                end = content.find(".", start)
-                if end > start:
-                    return content[start:end + 1]
-        except Exception:
-            pass
         return None
 
     def format_for_injection(self, context: InjectionContext) -> Optional[str]:
