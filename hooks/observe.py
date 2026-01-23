@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """
-Spark Observation Hook: Ultra-fast event capture.
+Spark Observation Hook: Ultra-fast event capture with reasoning.
 
 This script is called by Claude Code hooks.
 It MUST complete in < 50ms to avoid any slowdown.
 
 Design:
 1. Read stdin (hook input)
-2. Append to queue file
-3. Exit 0 immediately
+2. On PRE_TOOL: Infer intent, store prediction
+3. On POST_TOOL: Resolve prediction, capture learning
+4. Append to queue file
+5. Exit 0 immediately
 
 NO network calls. NO heavy processing. Just capture and go.
 """
@@ -22,6 +24,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from lib.queue import quick_capture, EventType
+from lib.intent_inferrer import infer_intent, predict_outcome
+
+# Fast file-based prediction storage
+PREDICTIONS_FILE = Path.home() / ".spark" / "predictions.json"
 
 
 def get_event_type(hook_event_name: str) -> EventType:
@@ -38,11 +44,112 @@ def get_event_type(hook_event_name: str) -> EventType:
     return mapping.get(hook_event_name, EventType.POST_TOOL)
 
 
+def store_prediction(session_id: str, tool_name: str, tool_input: dict) -> dict:
+    """
+    Store a prediction for later resolution. Fast file write.
+
+    Returns the prediction dict for inclusion in event data.
+    """
+    try:
+        PREDICTIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+        # Infer intent and predict
+        intent, confidence, risks = infer_intent(tool_name, tool_input)
+        expected_outcome = predict_outcome(tool_name, tool_input)
+
+        prediction = {
+            "session_id": session_id,
+            "tool_name": tool_name,
+            "timestamp": time.time(),
+            "intent": intent,
+            "confidence": confidence,
+            "risks": risks,
+            "expected_outcome": expected_outcome
+        }
+
+        # Load existing predictions
+        predictions = {}
+        if PREDICTIONS_FILE.exists():
+            try:
+                predictions = json.loads(PREDICTIONS_FILE.read_text())
+            except:
+                predictions = {}
+
+        # Store by session:tool key (most recent wins)
+        key = f"{session_id}:{tool_name}"
+        predictions[key] = prediction
+
+        # Keep only last 20 predictions
+        if len(predictions) > 20:
+            sorted_keys = sorted(predictions.keys(),
+                                 key=lambda k: predictions[k].get("timestamp", 0))
+            for old_key in sorted_keys[:-20]:
+                del predictions[old_key]
+
+        PREDICTIONS_FILE.write_text(json.dumps(predictions))
+        return prediction
+
+    except Exception:
+        return {}
+
+
+def resolve_prediction(session_id: str, tool_name: str, success: bool, error: str = None) -> dict:
+    """
+    Resolve a prediction and return the learning.
+
+    Returns learning data to include in event.
+    """
+    try:
+        if not PREDICTIONS_FILE.exists():
+            return {}
+
+        predictions = json.loads(PREDICTIONS_FILE.read_text())
+        key = f"{session_id}:{tool_name}"
+
+        if key not in predictions:
+            return {}
+
+        prediction = predictions[key]
+        del predictions[key]
+        PREDICTIONS_FILE.write_text(json.dumps(predictions))
+
+        # Calculate accuracy
+        expected_success = prediction["confidence"] >= 0.5
+        was_correct = (expected_success == success)
+
+        # Generate learning from gap
+        learning = None
+        if not was_correct:
+            if expected_success and not success:
+                # Predicted success, got failure
+                learning = f"PREDICTION_WRONG: Expected {prediction['intent']} to succeed " \
+                          f"(confidence: {prediction['confidence']:.0%}), but failed"
+                if error:
+                    learning += f". Error: {error[:50]}"
+                if prediction["risks"]:
+                    learning += f". Missed risk: {prediction['risks'][0]}"
+            else:
+                # Predicted failure, got success
+                learning = f"PREDICTION_PESSIMISTIC: {prediction['intent']} succeeded " \
+                          f"despite low confidence ({prediction['confidence']:.0%})"
+
+        return {
+            "prediction": prediction,
+            "actual_success": success,
+            "was_correct": was_correct,
+            "learning": learning
+        }
+
+    except Exception:
+        return {}
+
+
 def main():
     """
     Main hook entry point.
 
     Reads hook data from stdin, queues it, exits fast.
+    With reasoning: captures predictions on PRE_TOOL, resolves on POST_TOOL.
     """
     start = time.time()
 
@@ -84,9 +191,34 @@ def main():
             data["agent_prompt"] = (tool_input.get("prompt", "")[:200]
                                     if tool_input.get("prompt") else None)
 
+    # REASONING: On PRE_TOOL, store a prediction
+    if event_type == EventType.PRE_TOOL and tool_name:
+        prediction = store_prediction(session_id, tool_name, tool_input)
+        if prediction:
+            data["prediction"] = {
+                "intent": prediction.get("intent"),
+                "confidence": prediction.get("confidence"),
+                "risks": prediction.get("risks", [])
+            }
+
     # For failure events, include error info
+    error = None
     if "tool_error" in input_data:
-        kwargs["error"] = input_data.get("tool_error")
+        error = input_data.get("tool_error")
+        kwargs["error"] = error
+
+    # REASONING: On POST_TOOL/POST_TOOL_FAILURE, resolve prediction
+    if event_type in (EventType.POST_TOOL, EventType.POST_TOOL_FAILURE) and tool_name:
+        success = (event_type == EventType.POST_TOOL)
+        resolution = resolve_prediction(session_id, tool_name, success, error)
+        if resolution:
+            data["prediction_resolution"] = {
+                "was_correct": resolution.get("was_correct"),
+                "learning": resolution.get("learning")
+            }
+            # If there's a learning, include it prominently
+            if resolution.get("learning"):
+                data["reasoning_learning"] = resolution["learning"]
 
     # Queue the event (fast file append)
     quick_capture(event_type, session_id, data, **kwargs)

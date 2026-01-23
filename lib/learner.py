@@ -45,6 +45,27 @@ class ErrorInfo:
 
 
 @dataclass
+class ReasoningStats:
+    """Statistics for reasoning/prediction accuracy."""
+    tool_name: str
+    total_predictions: int = 0
+    correct_predictions: int = 0
+    wrong_predictions: int = 0
+    overconfident_count: int = 0  # High confidence but failed
+    underconfident_count: int = 0  # Low confidence but succeeded
+
+    @property
+    def accuracy_rate(self) -> float:
+        if self.total_predictions == 0:
+            return 0.0
+        return self.correct_predictions / self.total_predictions
+
+    @property
+    def is_overconfident(self) -> bool:
+        return self.overconfident_count > self.underconfident_count + 2
+
+
+@dataclass
 class ToolStats:
     """Statistics for a tool."""
     name: str
@@ -78,8 +99,10 @@ class SparkLearner:
     def __init__(self, mind_client: Optional[MindClient] = None):
         self.mind = mind_client or MindClient()
         self.tool_stats: Dict[str, ToolStats] = defaultdict(lambda: ToolStats(name="unknown"))
+        self.reasoning_stats: Dict[str, ReasoningStats] = defaultdict(lambda: ReasoningStats(tool_name="unknown"))
         self.session_events: List[SparkEvent] = []
         self.patterns_found: List[Pattern] = []
+        self.reasoning_learnings: List[str] = []  # Learnings from prediction gaps
 
         # Behavior weights (loaded from Mind, updated by learnings)
         self.tool_weights: Dict[str, float] = {}  # tool -> preference weight
@@ -123,12 +146,14 @@ class SparkLearner:
         self.session_events.extend(events)
         patterns = []
 
-        # Update tool statistics
+        # Update tool statistics and reasoning statistics
         for event in events:
             if event.event_type == EventType.POST_TOOL:
                 self._update_tool_stats(event, success=True)
+                self._update_reasoning_stats(event, success=True)
             elif event.event_type == EventType.POST_TOOL_FAILURE:
                 self._update_tool_stats(event, success=False)
+                self._update_reasoning_stats(event, success=False)
 
         # Extract patterns when we have enough data
         if len(self.session_events) >= 10:
@@ -136,6 +161,38 @@ class SparkLearner:
             self.patterns_found.extend(patterns)
 
         return patterns
+
+    def _update_reasoning_stats(self, event: SparkEvent, success: bool):
+        """Update reasoning/prediction statistics from event."""
+        tool_name = event.tool_name or "unknown"
+        data = event.data or {}
+
+        # Check if there's a prediction resolution
+        resolution = data.get("prediction_resolution", {})
+        if not resolution:
+            return
+
+        stats = self.reasoning_stats[tool_name]
+        stats.tool_name = tool_name
+        stats.total_predictions += 1
+
+        was_correct = resolution.get("was_correct", True)
+        if was_correct:
+            stats.correct_predictions += 1
+        else:
+            stats.wrong_predictions += 1
+
+            # Check for overconfidence vs underconfidence
+            learning = resolution.get("learning", "")
+            if "PREDICTION_WRONG" in learning:
+                stats.overconfident_count += 1
+            elif "PREDICTION_PESSIMISTIC" in learning:
+                stats.underconfident_count += 1
+
+        # Capture the reasoning learning
+        reasoning_learning = data.get("reasoning_learning")
+        if reasoning_learning:
+            self.reasoning_learnings.append(reasoning_learning)
 
     def _update_tool_stats(self, event: SparkEvent, success: bool):
         """Update statistics for a tool."""
@@ -332,6 +389,72 @@ class SparkLearner:
                     }
                 )
                 patterns.append(pattern)
+
+        # Pattern 4: Reasoning/prediction accuracy patterns
+        for tool_name, stats in self.reasoning_stats.items():
+            if stats.total_predictions >= 3:  # Need minimum samples
+                # Overconfidence pattern
+                if stats.is_overconfident:
+                    pattern = Pattern(
+                        pattern_type="overconfidence",
+                        description=f"Overconfident with {tool_name}: predicted {stats.accuracy_rate:.0%} accuracy but often wrong",
+                        conditions=[f"tool={tool_name}"],
+                        confidence=min(stats.total_predictions / 10, 1.0),
+                        sample_size=stats.total_predictions,
+                        metadata={
+                            "tool": tool_name,
+                            "total_predictions": stats.total_predictions,
+                            "correct": stats.correct_predictions,
+                            "wrong": stats.wrong_predictions,
+                            "overconfident_count": stats.overconfident_count
+                        }
+                    )
+                    patterns.append(pattern)
+
+                # General prediction accuracy pattern
+                if stats.accuracy_rate < 0.6 and stats.total_predictions >= 5:
+                    pattern = Pattern(
+                        pattern_type="prediction_accuracy",
+                        description=f"Low prediction accuracy for {tool_name}: {stats.accuracy_rate:.0%} correct",
+                        conditions=[f"tool={tool_name}"],
+                        confidence=min(stats.total_predictions / 10, 1.0),
+                        sample_size=stats.total_predictions,
+                        metadata={
+                            "tool": tool_name,
+                            "accuracy_rate": stats.accuracy_rate,
+                            "needs_calibration": True
+                        }
+                    )
+                    patterns.append(pattern)
+
+        # Pattern 5: Reasoning learnings (from prediction gaps)
+        if self.reasoning_learnings:
+            # Deduplicate and count similar learnings
+            learning_counts: Dict[str, int] = {}
+            for learning in self.reasoning_learnings:
+                # Normalize to first 50 chars for grouping
+                key = learning[:50].lower()
+                learning_counts[key] = learning_counts.get(key, 0) + 1
+
+            for learning_key, count in learning_counts.items():
+                if count >= 2:  # Recurring pattern
+                    # Find the full learning
+                    full_learning = next(
+                        (l for l in self.reasoning_learnings if l[:50].lower() == learning_key),
+                        learning_key
+                    )
+                    pattern = Pattern(
+                        pattern_type="reasoning_gap",
+                        description=full_learning,
+                        conditions=["prediction != outcome"],
+                        confidence=min(count / 5, 1.0),
+                        sample_size=count,
+                        metadata={
+                            "learning_type": "prediction_gap",
+                            "occurrences": count
+                        }
+                    )
+                    patterns.append(pattern)
 
         return patterns
 
