@@ -31,6 +31,8 @@ from lib.orchestrator import AgentOrchestrator
 from lib.prompt_evolver import PromptEvolver
 from lib.meta_learner import MetaLearner
 from lib.suggester import Suggester
+from lib.injection_tracker import InjectionTracker
+from lib.experiment_manager import ExperimentManager
 
 
 # Configure logging
@@ -59,12 +61,17 @@ class SparkProcessor:
         self.prompt_evolver = PromptEvolver(self.mind)
         self.meta_learner = MetaLearner(self.mind)
         self.suggester = Suggester(self.mind)
+        # M5 Feedback Loop components
+        self.injection_tracker = InjectionTracker(self.mind)
+        self.experiment_manager = ExperimentManager(self.mind)
         self.running = False
         self.processed_count = 0
         self.patterns_found = 0
         self.skills_tracked = 0
         self.agents_tracked = 0
         self.traces_captured = 0
+        self.injections_tracked = 0
+        self.experiments_concluded = 0
 
     async def initialize(self):
         """Initialize processor, load existing learnings."""
@@ -216,6 +223,36 @@ class SparkProcessor:
                 # Store meta-learnings
                 if await self.mind.is_available():
                     await self.meta_learner.store_meta_learnings()
+
+        # M5: Track injection outcomes
+        for event in events:
+            result = self.injection_tracker.observe_event(event)
+            if result:
+                self.injections_tracked += 1
+                # Update learning confidence based on outcome
+                await self.injection_tracker.update_learning_confidence(result)
+
+        # M5: Expire stale injections
+        expired = self.injection_tracker.expire_stale_injections()
+        if expired:
+            log.info(f"Expired {expired} stale injections")
+
+        # M5: Check experiments for auto-conclusion
+        for exp in self.experiment_manager.get_active_experiments():
+            result = self.experiment_manager.auto_conclude_if_significant(exp.experiment_id)
+            if result:
+                self.experiments_concluded += 1
+                log.info(f"Experiment '{exp.name}' concluded: {result.recommended_winner} wins "
+                         f"({result.treatment_success_rate:.1%} vs {result.control_success_rate:.1%})")
+                if await self.mind.is_available():
+                    await self.experiment_manager.persist_experiment(exp.experiment_id)
+
+        # M5: Log feedback loop stats periodically
+        if self.processed_count > 0 and self.processed_count % 100 == 0:
+            feedback_stats = self.injection_tracker.get_stats()
+            if feedback_stats.total_injections > 0:
+                log.info(f"Feedback loop: {feedback_stats.follow_rate:.0%} follow rate "
+                         f"({feedback_stats.followed_count}/{feedback_stats.total_injections})")
 
         return len(events)
 
@@ -369,6 +406,11 @@ Patterns extracted this session: {self.patterns_found}.
             "pareto_frontier": len(self.prompt_evolver.pareto_frontier),
             "meta_learnings": self.meta_learner.total_learnings,
             "suggestions_loaded": len(self.suggester.suggestions),
+            # M5 status
+            "injections_tracked": self.injections_tracked,
+            "injection_follow_rate": self.injection_tracker.get_stats().follow_rate,
+            "active_experiments": len(self.experiment_manager.get_active_experiments()),
+            "experiments_concluded": self.experiments_concluded,
         }
 
 
@@ -437,6 +479,11 @@ async def main():
         print(f"   Pareto frontier: {status['pareto_frontier']}")
         print(f"   Meta-learnings: {status['meta_learnings']}")
         print(f"   Suggestions: {status['suggestions_loaded']}")
+        # M5 status
+        print(f"   Injections tracked: {status['injections_tracked']}")
+        print(f"   Follow rate: {status['injection_follow_rate']:.0%}")
+        print(f"   Active experiments: {status['active_experiments']}")
+        print(f"   Experiments concluded: {status['experiments_concluded']}")
 
     # Cleanup
     await processor.mind.close()
