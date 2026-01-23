@@ -6,6 +6,8 @@ This hook runs when a Claude Code session starts.
 It pulls learnings from Mind via ContextInjector and feeds
 them back to Claude - closing the learning loop.
 
+Also uses Suggester for proactive warnings.
+
 Target: < 200ms to avoid slowing session start.
 """
 
@@ -20,6 +22,7 @@ from typing import Optional
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from lib.context_injector import ContextInjector
+from lib.suggester import Suggester
 
 
 def extract_project_name(cwd: str) -> Optional[str]:
@@ -35,11 +38,37 @@ def extract_project_name(cwd: str) -> Optional[str]:
     return None
 
 
-async def load_and_inject(project_name: Optional[str]) -> Optional[str]:
+async def load_and_inject(project_name: Optional[str], session_id: Optional[str] = None) -> Optional[str]:
     """Load context from Mind and format for injection."""
     injector = ContextInjector()
+    suggester = Suggester()
+
     try:
-        return await injector.get_injection_string(project_name)
+        # Load context and suggestions in parallel
+        context_task = injector.get_injection_string(project_name)
+        suggestions_task = suggester.load_suggestions_from_mind()
+
+        context, _ = await asyncio.gather(context_task, suggestions_task)
+
+        # Update suggester context
+        if session_id:
+            suggester.update_context(session_id=session_id, project_name=project_name)
+
+        # Get proactive warnings
+        warnings = suggester.get_relevant_suggestions(max_suggestions=2, min_confidence=0.7)
+
+        # Combine context and warnings
+        parts = []
+        if context:
+            parts.append(context)
+
+        if warnings:
+            warning_text = suggester.format_suggestions_for_display(warnings, compact=True)
+            if warning_text:
+                parts.append(warning_text)
+
+        return "\n".join(parts) if parts else None
+
     finally:
         await injector.close()
 
@@ -52,14 +81,15 @@ def main():
     except Exception:
         sys.exit(0)
 
-    # Extract project context
+    # Extract context
     cwd = input_data.get("cwd", os.getcwd())
     project_name = extract_project_name(cwd)
+    session_id = input_data.get("session_id")
 
     # Load context with timeout
     try:
         context = asyncio.run(asyncio.wait_for(
-            load_and_inject(project_name),
+            load_and_inject(project_name, session_id),
             timeout=2.0
         ))
     except asyncio.TimeoutError:
