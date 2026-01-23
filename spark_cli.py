@@ -739,6 +739,7 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Commands:
+  startup     Session startup validator (run at session start!)
   status      Show current Spark status
   witness     Unified view of what's happening (recommended)
   live        Live monitoring mode - continuous witness updates
@@ -757,7 +758,7 @@ Commands:
     )
 
     parser.add_argument("command", nargs="?", default="status",
-                       choices=["status", "witness", "live", "report", "doctor", "introspect", "improve", "calibration", "learn", "reflect", "learnings",
+                       choices=["startup", "status", "witness", "live", "report", "doctor", "introspect", "improve", "calibration", "learn", "reflect", "learnings",
                                "watch", "clear", "hooks", "health"],
                        help="Command to run")
     parser.add_argument("--interval", type=int, default=5,
@@ -773,12 +774,22 @@ Commands:
                        help="Auto-apply fixes without prompting (for doctor command)")
     parser.add_argument("--verify", action="store_true",
                        help="Verify fixes after healing (for doctor command)")
+    parser.add_argument("--fix", action="store_true",
+                       help="Auto-fix issues found (for startup command)")
 
     args = parser.parse_args()
 
     print_banner()
 
-    if args.command == "status":
+    if args.command == "startup":
+        from spark_startup import StartupValidator, run_doctor_if_needed
+        async def run_startup():
+            validator = StartupValidator()
+            ok = await validator.run_all_checks()
+            if not ok and args.fix:
+                await run_doctor_if_needed(auto_fix=True)
+        asyncio.run(run_startup())
+    elif args.command == "status":
         asyncio.run(cmd_status())
     elif args.command == "witness":
         if args.live:
