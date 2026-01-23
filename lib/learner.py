@@ -45,6 +45,16 @@ class ErrorInfo:
 
 
 @dataclass
+class RecoveryPattern:
+    """A pattern where one tool recovers from another's failure."""
+    failed_tool: str
+    failed_error: str
+    recovery_tool: str
+    count: int = 1
+    success_rate: float = 1.0  # How often the recovery works
+
+
+@dataclass
 class ReasoningStats:
     """Statistics for reasoning/prediction accuracy."""
     tool_name: str
@@ -108,6 +118,10 @@ class SparkLearner:
         self.tool_weights: Dict[str, float] = {}  # tool -> preference weight
         self.skill_weights: Dict[str, float] = {}  # skill -> effectiveness weight
         self.agent_weights: Dict[str, float] = {}  # agent_type -> effectiveness weight
+
+        # Cross-tool recovery tracking
+        self._last_failure: Optional[Dict[str, Any]] = None
+        self._recovery_patterns: Dict[str, RecoveryPattern] = {}  # key -> RecoveryPattern
 
     async def load_existing_learnings(self):
         """Load existing learnings from Mind to initialize weights."""
@@ -233,28 +247,53 @@ class SparkLearner:
 
     def _check_recovery(self, success_event: SparkEvent):
         """Check if this success recovered from a previous failure."""
-        if not hasattr(self, "_last_failure") or self._last_failure is None:
+        if self._last_failure is None:
             return
 
         last = self._last_failure
-        # Same session, same tool, within reasonable time = recovery
-        if (last["session_id"] == success_event.session_id and
-            last["tool"] == success_event.tool_name):
-            # Mark as recovered
+
+        # Must be same session
+        if last["session_id"] != success_event.session_id:
+            self._last_failure = None
+            return
+
+        # Check time window (within 60 seconds)
+        time_diff = success_event.timestamp - last["timestamp"]
+        if time_diff > 60:
+            self._last_failure = None
+            return
+
+        # Same-tool recovery (retry worked)
+        if last["tool"] == success_event.tool_name:
             tool_stats = self.tool_stats.get(last["tool"])
             if tool_stats and last["category"] in tool_stats.error_details:
                 tool_stats.error_details[last["category"]].recovered += 1
 
-            # Track recovery pattern
-            if not hasattr(self, "_recovery_patterns"):
-                self._recovery_patterns = []
-            self._recovery_patterns.append({
-                "tool": last["tool"],
-                "error_category": last["category"],
-                "recovered": True
-            })
+        # Cross-tool recovery (different tool succeeded after failure)
+        else:
+            self._track_cross_tool_recovery(
+                failed_tool=last["tool"],
+                failed_error=last["category"],
+                recovery_tool=success_event.tool_name
+            )
 
         self._last_failure = None
+
+    def _track_cross_tool_recovery(self, failed_tool: str, failed_error: str, recovery_tool: str):
+        """Track when a different tool succeeds after a failure."""
+        # Create unique key for this recovery pattern
+        key = f"{failed_tool}:{failed_error}:{recovery_tool}"
+
+        if key in self._recovery_patterns:
+            self._recovery_patterns[key].count += 1
+        else:
+            self._recovery_patterns[key] = RecoveryPattern(
+                failed_tool=failed_tool,
+                failed_error=failed_error,
+                recovery_tool=recovery_tool,
+                count=1,
+                success_rate=1.0
+            )
 
     def _categorize_error(self, error: str) -> Tuple[str, Optional[str]]:
         """
@@ -463,6 +502,73 @@ class SparkLearner:
         # Pattern 7: Timing patterns (what's fast, what's slow)
         timing_patterns = self._extract_timing_patterns()
         patterns.extend(timing_patterns)
+
+        # Pattern 8: Recovery patterns (when X fails, try Y)
+        recovery_patterns = self._extract_recovery_patterns()
+        patterns.extend(recovery_patterns)
+
+        return patterns
+
+    def _extract_recovery_patterns(self) -> List[Pattern]:
+        """Extract patterns about recovering from failures."""
+        patterns = []
+
+        for key, recovery in self._recovery_patterns.items():
+            # Need at least 2 occurrences to be a pattern
+            if recovery.count >= 2:
+                pattern = Pattern(
+                    pattern_type="recovery_strategy",
+                    description=f"When {recovery.failed_tool} fails with {recovery.failed_error}, "
+                               f"try {recovery.recovery_tool} (worked {recovery.count} times)",
+                    conditions=[
+                        f"failed_tool={recovery.failed_tool}",
+                        f"error={recovery.failed_error}"
+                    ],
+                    confidence=min(recovery.count / 5, 1.0),
+                    sample_size=recovery.count,
+                    metadata={
+                        "failed_tool": recovery.failed_tool,
+                        "failed_error": recovery.failed_error,
+                        "recovery_tool": recovery.recovery_tool,
+                        "occurrences": recovery.count,
+                        "pattern_key": key
+                    }
+                )
+                patterns.append(pattern)
+
+            # Also capture single occurrences if the recovery tool is notably different
+            elif recovery.count == 1:
+                # Different tool categories suggest interesting recovery
+                SEARCH_TOOLS = {"Grep", "Glob", "Read"}
+                EDIT_TOOLS = {"Edit", "Write"}
+
+                is_cross_category = (
+                    (recovery.failed_tool in SEARCH_TOOLS and recovery.recovery_tool in SEARCH_TOOLS and
+                     recovery.failed_tool != recovery.recovery_tool) or
+                    (recovery.failed_tool in EDIT_TOOLS and recovery.recovery_tool not in EDIT_TOOLS)
+                )
+
+                if is_cross_category:
+                    pattern = Pattern(
+                        pattern_type="recovery_strategy",
+                        description=f"When {recovery.failed_tool} fails with {recovery.failed_error}, "
+                                   f"{recovery.recovery_tool} may work (observed once)",
+                        conditions=[
+                            f"failed_tool={recovery.failed_tool}",
+                            f"error={recovery.failed_error}"
+                        ],
+                        confidence=0.5,  # Lower confidence for single observation
+                        sample_size=1,
+                        metadata={
+                            "failed_tool": recovery.failed_tool,
+                            "failed_error": recovery.failed_error,
+                            "recovery_tool": recovery.recovery_tool,
+                            "occurrences": 1,
+                            "pattern_key": key,
+                            "early_learning": True
+                        }
+                    )
+                    patterns.append(pattern)
 
         return patterns
 
@@ -768,6 +874,9 @@ class SparkLearner:
             slower = pattern.metadata.get("slower_tool", "")
             category = pattern.metadata.get("task_category", "")
             return f"timing_cmp:{category}:{faster}:{slower}"
+        elif pattern.pattern_type == "recovery_strategy":
+            key = pattern.metadata.get("pattern_key", "")
+            return f"recovery:{key}"
         else:
             # Fallback: use conditions
             return f"{pattern.pattern_type}:{':'.join(pattern.conditions)}"

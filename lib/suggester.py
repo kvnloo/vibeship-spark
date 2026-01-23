@@ -149,6 +149,22 @@ class Suggester:
             if suggestion:
                 self.suggestions[suggestion.suggestion_id] = suggestion
 
+        # Load recovery strategy patterns (when X fails, try Y)
+        recovery_patterns = await self.mind.retrieve(
+            query="RECOVERY_STRATEGY LEARNING",
+            limit=20,
+            temporal_level=TemporalLevel.IDENTITY,
+            content_type=ContentType.REFLECTION
+        )
+
+        for pattern in recovery_patterns:
+            content = pattern.get("content", "")
+            metadata = pattern.get("metadata", {})
+
+            suggestion = self._create_recovery_suggestion(content, metadata)
+            if suggestion:
+                self.suggestions[suggestion.suggestion_id] = suggestion
+
     def _create_warning_from_error_pattern(
         self,
         content: str,
@@ -262,6 +278,47 @@ class Suggester:
             trigger_task_type=task_type,
             evidence=[f"{success_rate:.0%} success for {best_task or 'similar tasks'}"],
             based_on_samples=metadata.get("total_uses", 1)
+        )
+
+    def _create_recovery_suggestion(
+        self,
+        content: str,
+        metadata: Dict[str, Any]
+    ) -> Optional[Suggestion]:
+        """Create a recovery suggestion from recovery strategy pattern."""
+        if "RECOVERY_STRATEGY" not in content:
+            return None
+
+        failed_tool = metadata.get("failed_tool")
+        failed_error = metadata.get("failed_error")
+        recovery_tool = metadata.get("recovery_tool")
+        occurrences = metadata.get("occurrences", 1)
+
+        if not failed_tool or not recovery_tool:
+            return None
+
+        suggestion_id = f"recovery:{failed_tool}:{failed_error}:{recovery_tool}"
+
+        # Build descriptive message
+        if failed_error:
+            description = f"When {failed_tool} fails with {failed_error}, try {recovery_tool} instead"
+        else:
+            description = f"When {failed_tool} fails, try {recovery_tool} instead"
+
+        if occurrences > 1:
+            description += f" (worked {occurrences} times)"
+
+        return Suggestion(
+            suggestion_id=suggestion_id,
+            suggestion_type="recovery",
+            priority=1,  # High priority - immediate actionable advice
+            title=f"Recovery: Try {recovery_tool}",
+            description=description,
+            confidence=min(occurrences / 5, 1.0),
+            trigger_keywords=[failed_error] if failed_error else [],
+            trigger_tool=failed_tool,  # Trigger when this tool is about to be used
+            evidence=[f"Recovered from {failed_tool} failure {occurrences} times"],
+            based_on_samples=occurrences
         )
 
     def _extract_keywords(self, text: str) -> List[str]:
@@ -465,6 +522,68 @@ class Suggester:
         self.current_context = old_context
 
         return [s for s, _ in relevant[:5]]
+
+    def get_recovery_suggestions(
+        self,
+        failed_tool: str,
+        error_category: Optional[str] = None
+    ) -> List[Suggestion]:
+        """
+        Get recovery suggestions when a tool fails.
+
+        This is the key method for resilience learning - when something fails,
+        suggest what to try next based on past successful recoveries.
+        """
+        recoveries = []
+
+        for suggestion in self.suggestions.values():
+            if suggestion.suggestion_type != "recovery":
+                continue
+
+            if not suggestion.should_still_show:
+                continue
+
+            # Must match the failed tool
+            if suggestion.trigger_tool != failed_tool:
+                continue
+
+            # Optionally match error category
+            if error_category and suggestion.trigger_keywords:
+                if error_category not in suggestion.trigger_keywords:
+                    # Lower priority if error doesn't match
+                    # but still include as general recovery
+                    recoveries.append((suggestion, suggestion.confidence * 0.5))
+                else:
+                    recoveries.append((suggestion, suggestion.confidence))
+            else:
+                recoveries.append((suggestion, suggestion.confidence))
+
+        # Sort by confidence
+        recoveries.sort(key=lambda x: x[1], reverse=True)
+
+        # Return suggestions (not marking as shown - these are situational)
+        return [s for s, _ in recoveries[:3]]
+
+    def format_recovery_advice(
+        self,
+        failed_tool: str,
+        error_category: Optional[str] = None
+    ) -> Optional[str]:
+        """
+        Format recovery advice for display after a failure.
+
+        Returns None if no recovery suggestions available.
+        """
+        recoveries = self.get_recovery_suggestions(failed_tool, error_category)
+
+        if not recoveries:
+            return None
+
+        lines = ["[SPARK RECOVERY] Suggestions based on past recoveries:"]
+        for r in recoveries:
+            lines.append(f"  -> {r.description}")
+
+        return "\n".join(lines)
 
     def format_suggestions_for_display(
         self,
