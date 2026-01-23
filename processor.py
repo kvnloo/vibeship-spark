@@ -185,9 +185,9 @@ class SparkProcessor:
             # Feed learnings to meta-learner
             for pattern in patterns or []:
                 self.meta_learner.record_learning(
-                    learning_type="tool",
+                    learning_type=pattern.pattern_type,
                     source="learner",
-                    confidence=pattern.get("confidence", 0.7)
+                    confidence=pattern.confidence
                 )
 
             # Periodically reflect and evolve
