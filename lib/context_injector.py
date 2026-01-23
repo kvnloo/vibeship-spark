@@ -115,35 +115,36 @@ class ContextInjector:
         return context
 
     async def _gather_tool_insights(self, project_name: Optional[str]) -> List[str]:
-        """Gather tool effectiveness insights."""
-        query = "TOOL_EFFECTIVENESS LEARNING"
-        if project_name:
-            query = f"{project_name} {query}"
-
-        learnings = await self.mind.retrieve(
-            query=query,
-            limit=5,
-            temporal_level=TemporalLevel.IDENTITY,
-            content_type=ContentType.REFLECTION
-        )
-
+        """Gather tool effectiveness and sequence insights."""
         insights = []
-        for l in learnings[:self.MAX_ITEMS_PER_CATEGORY]:
-            content = l.get("content", "")
-            formatted = self._format_tool_insight(content)
-            if formatted:
-                insights.append(formatted)
+
+        # Query both TOOL_EFFECTIVENESS and TOOL_SEQUENCE (single-term queries work better)
+        for query_term in ["TOOL_EFFECTIVENESS", "TOOL_SEQUENCE"]:
+            learnings = await self.mind.retrieve(
+                query=query_term,
+                limit=5,
+                temporal_level=TemporalLevel.IDENTITY,
+                content_type=ContentType.REFLECTION
+            )
+
+            for l in learnings[:self.MAX_ITEMS_PER_CATEGORY]:
+                content = l.get("content", "")
+                formatted = self._format_tool_insight(content)
+                if formatted and formatted not in insights:
+                    insights.append(formatted)
+                    if len(insights) >= self.MAX_ITEMS_PER_CATEGORY:
+                        break
+
+            if len(insights) >= self.MAX_ITEMS_PER_CATEGORY:
+                break
 
         return insights
 
     async def _gather_skill_recommendations(self, project_name: Optional[str]) -> List[Tuple[str, float, str]]:
         """Gather skill effectiveness data."""
-        query = "SKILL_EFFECTIVENESS LEARNING"
-        if project_name:
-            query = f"{project_name} {query}"
-
+        # Use single-term query for better Mind search matching
         learnings = await self.mind.retrieve(
-            query=query,
+            query="SKILL_EFFECTIVENESS",
             limit=5,
             temporal_level=TemporalLevel.IDENTITY,
             content_type=ContentType.REFLECTION
@@ -168,10 +169,9 @@ class ContextInjector:
 
     async def _gather_agent_recommendations(self, project_name: Optional[str]) -> List[Tuple[str, float, str]]:
         """Gather agent effectiveness data."""
-        query = "AGENT_EFFECTIVENESS LEARNING"
-
+        # Use single-term query for better Mind search matching
         learnings = await self.mind.retrieve(
-            query=query,
+            query="AGENT_EFFECTIVENESS",
             limit=5,
             temporal_level=TemporalLevel.IDENTITY,
             content_type=ContentType.REFLECTION
@@ -195,12 +195,9 @@ class ContextInjector:
 
     async def _gather_error_warnings(self, project_name: Optional[str]) -> List[str]:
         """Gather error avoidance patterns."""
-        query = "ERROR_AVOIDANCE LEARNING"
-        if project_name:
-            query = f"{project_name} {query}"
-
+        # Use single-term query for better Mind search matching
         learnings = await self.mind.retrieve(
-            query=query,
+            query="ERROR_AVOIDANCE",
             limit=4,
             temporal_level=TemporalLevel.IDENTITY,
             content_type=ContentType.REFLECTION
@@ -217,8 +214,9 @@ class ContextInjector:
 
     async def _gather_parallel_patterns(self) -> List[str]:
         """Gather successful parallel execution patterns."""
+        # Use single-term query for better Mind search matching
         learnings = await self.mind.retrieve(
-            query="PARALLEL_PATTERN LEARNING",
+            query="PARALLEL_PATTERN",
             limit=3,
             temporal_level=TemporalLevel.SEASONAL,
             content_type=ContentType.REFLECTION
@@ -237,21 +235,31 @@ class ContextInjector:
         return patterns
 
     def _format_tool_insight(self, content: str) -> Optional[str]:
-        """Format a tool effectiveness learning."""
-        if "TOOL_EFFECTIVENESS" not in content:
+        """Format a tool effectiveness or sequence learning."""
+        # Handle both TOOL_EFFECTIVENESS and TOOL_SEQUENCE patterns
+        if "TOOL_EFFECTIVENESS" not in content and "TOOL_SEQUENCE" not in content:
             return None
 
         try:
-            # Extract: "Tool has X% success rate"
-            parts = content.split(":")
-            if len(parts) >= 2:
-                insight = parts[1].strip()
-                # First sentence only
-                if "." in insight:
-                    insight = insight.split(".")[0] + "."
-                if len(insight) > 60:
-                    insight = insight[:57] + "..."
-                return insight
+            # Extract the part after the pattern type marker
+            # Format: "LEARNING [TYPE]: actual content here"
+            if "]:" in content:
+                insight = content.split("]:")[1].strip()
+            elif ":" in content:
+                parts = content.split(":")
+                insight = parts[-1].strip() if len(parts) > 1 else content
+
+            # First sentence only
+            if ". " in insight:
+                insight = insight.split(". ")[0] + "."
+            elif "." in insight:
+                insight = insight.split(".")[0] + "."
+
+            # Truncate if too long
+            if len(insight) > 70:
+                insight = insight[:67] + "..."
+
+            return insight if insight else None
         except Exception:
             pass
         return None
@@ -294,8 +302,8 @@ class ContextInjector:
         lines = []
         total_chars = 0
 
-        # Header
-        header = "⚡ Spark Intelligence:"
+        # Header (ASCII-safe for Windows compatibility)
+        header = ">> Spark Intelligence:"
         lines.append(header)
         total_chars += len(header)
 
@@ -304,14 +312,14 @@ class ContextInjector:
             for insight in context.tool_insights[:2]:
                 if total_chars + len(insight) + 4 > self.MAX_CONTEXT_CHARS:
                     break
-                line = f"  • {insight}"
+                line = f"  - {insight}"
                 lines.append(line)
                 total_chars += len(line) + 1
 
         # Agent recommendations
         if context.agent_recommendations and total_chars < self.MAX_CONTEXT_CHARS - 100:
             for agent, conf, reason in context.agent_recommendations[:2]:
-                text = f"  • {agent}: {reason}"
+                text = f"  - {agent}: {reason}"
                 if total_chars + len(text) > self.MAX_CONTEXT_CHARS:
                     break
                 lines.append(text)
@@ -320,7 +328,7 @@ class ContextInjector:
         # Parallel patterns
         if context.parallel_patterns and total_chars < self.MAX_CONTEXT_CHARS - 80:
             for pattern in context.parallel_patterns[:1]:
-                text = f"  • Parallel: {pattern}"
+                text = f"  - Parallel: {pattern}"
                 if total_chars + len(text) > self.MAX_CONTEXT_CHARS:
                     break
                 lines.append(text)
@@ -328,7 +336,7 @@ class ContextInjector:
 
         # Error warnings (important)
         if context.error_warnings and total_chars < self.MAX_CONTEXT_CHARS - 100:
-            lines.append("  ⚠ Watch for:")
+            lines.append("  [!] Watch for:")
             total_chars += 15
             for warning in context.error_warnings[:2]:
                 if total_chars + len(warning) + 6 > self.MAX_CONTEXT_CHARS:
