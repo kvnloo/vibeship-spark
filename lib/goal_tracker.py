@@ -99,7 +99,7 @@ class GoalTracker:
     DEBUG_KEYWORDS = ["fix", "bug", "error", "broken", "fail", "crash", "issue", "wrong", "debug", "not working"]
     FEATURE_KEYWORDS = ["add", "create", "implement", "build", "new", "feature", "make", "develop"]
     REFACTOR_KEYWORDS = ["refactor", "improve", "clean", "optimize", "reorganize", "simplify", "rename"]
-    EXPLORE_KEYWORDS = ["find", "search", "where", "what", "how", "understand", "look", "show", "explain"]
+    EXPLORE_KEYWORDS = ["find", "search", "where", "what", "how", "understand", "look", "show", "explain", "analyze", "check", "review", "examine", "inspect"]
     TEST_KEYWORDS = ["test", "spec", "coverage", "assert", "verify", "check"]
     DEPLOY_KEYWORDS = ["deploy", "build", "release", "publish", "ship", "push", "merge"]
     DOCS_KEYWORDS = ["document", "readme", "comment", "describe", "explain"]

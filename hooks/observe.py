@@ -213,7 +213,7 @@ def _classify_goal(prompt: str) -> str:
     DEBUG = ["fix", "bug", "error", "broken", "fail", "crash", "issue", "wrong", "debug"]
     FEATURE = ["add", "create", "implement", "build", "new", "feature", "make"]
     REFACTOR = ["refactor", "improve", "clean", "optimize", "simplify", "rename"]
-    EXPLORE = ["find", "search", "where", "what", "how", "understand", "look", "show"]
+    EXPLORE = ["find", "search", "where", "what", "how", "understand", "look", "show", "analyze", "check", "review", "examine", "inspect"]
     TEST = ["test", "spec", "coverage", "verify"]
 
     scores = {
