@@ -412,7 +412,7 @@ async def main():
 
     elif args.mode == "status":
         status = await processor.get_status()
-        print("\n🔥 Spark Status:")
+        print("\n[Spark] Status:")
         print(f"   Queue size: {status['queue_size']}")
         print(f"   Processed: {status['processed_count']}")
         print(f"   Patterns found: {status['patterns_found']}")
