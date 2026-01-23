@@ -103,7 +103,7 @@ class MindClient:
                 f"{self.base_url}/v1/memories/",
                 json=memory.to_dict()
             ) as resp:
-                if resp.status == 200:
+                if resp.status in (200, 201):  # Accept both OK and Created
                     data = await resp.json()
                     return data.get("memory_id")
                 return None

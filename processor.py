@@ -104,16 +104,21 @@ class SparkProcessor:
         # Pop batch from queue
         events = self.queue.pop_batch(max_events=100)
 
-        if not events:
-            return 0
+        # Process events if any
+        patterns = []
+        if events:
+            log.info(f"Processing {len(events)} events...")
+            # Process events and extract patterns
+            patterns = await self.learner.process_events(events)
 
-        log.info(f"Processing {len(events)} events...")
-
-        # Process events and extract patterns
-        patterns = await self.learner.process_events(events)
+        # Also extract goal patterns from file (independent of events)
+        goal_patterns = self.learner._extract_goal_patterns()
+        if goal_patterns:
+            patterns.extend(goal_patterns)
+            log.info(f"Extracted {len(goal_patterns)} goal patterns")
 
         if patterns:
-            log.info(f"Extracted {len(patterns)} patterns")
+            log.info(f"Total {len(patterns)} patterns")
 
             # Store patterns in Mind
             if await self.mind.is_available():
@@ -121,7 +126,13 @@ class SparkProcessor:
                 log.info(f"Stored {stored} learnings in Mind")
                 self.patterns_found += stored
 
-        # Process skill events
+        if not events and not patterns:
+            return 0
+
+        # Process skill events (only if we have events)
+        if not events:
+            return len(patterns)  # Return pattern count if no events
+
         skill_usages = await self.skill_evolver.process_events(events)
         if skill_usages:
             self.skills_tracked += len(skill_usages)

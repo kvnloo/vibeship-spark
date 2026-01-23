@@ -487,7 +487,7 @@ class SparkLearner:
 
             # Extract patterns for each goal type
             for goal_type, completed_goals in by_type.items():
-                if len(completed_goals) >= 2:  # Need at least 2 goals
+                if len(completed_goals) >= 1:  # Even single goals are valuable
                     # Calculate average success and tool sequences
                     success_scores = [g.get("success_score", 0.5) for g in completed_goals]
                     avg_success = sum(success_scores) / len(success_scores)
@@ -506,13 +506,18 @@ class SparkLearner:
                         seq_counts = Counter(tool_sequences)
                         most_common_seq, count = seq_counts.most_common(1)[0]
 
-                        if count >= 2 and avg_success >= 0.6:
+                        # Accept single occurrences for early learning
+                        if avg_success >= 0.6:
                             seq_str = " -> ".join(most_common_seq)
+                            # Confidence based on sample size but min 0.6 for success
+                            # This ensures even single goals get stored
+                            base_confidence = min(len(completed_goals) / 3, 1.0)
+                            confidence = max(base_confidence, avg_success * 0.8)  # At least 80% of success
                             pattern = Pattern(
                                 pattern_type="goal_strategy",
                                 description=f"For {goal_type}: {seq_str} works ({avg_success:.0%} success)",
                                 conditions=[f"goal_type={goal_type}"],
-                                confidence=min(len(completed_goals) / 5, 1.0),
+                                confidence=confidence,
                                 sample_size=len(completed_goals),
                                 metadata={
                                     "goal_type": goal_type,
@@ -585,7 +590,9 @@ class SparkLearner:
         memories = []
 
         for pattern in patterns:
-            if pattern.confidence >= 0.7:  # Only store high-confidence patterns
+            # Lower threshold for goal strategies (early learning)
+            min_confidence = 0.5 if pattern.pattern_type == "goal_strategy" else 0.7
+            if pattern.confidence >= min_confidence:
                 memory = Memory(
                     content=f"LEARNING [{pattern.pattern_type.upper()}]: {pattern.description}. "
                            f"Conditions: {', '.join(pattern.conditions)}. "
