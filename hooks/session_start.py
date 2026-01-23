@@ -26,10 +26,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from lib.context_injector import ContextInjector
 from lib.suggester import Suggester
+from lib.injection_tracker import InjectionTracker
 
 # Daemon management
 SPARK_DIR = Path.home() / ".spark"
 PID_FILE = SPARK_DIR / "daemon.pid"
+INJECTIONS_FILE = SPARK_DIR / "active_injections.json"
 
 
 def is_daemon_running() -> bool:
@@ -107,17 +109,59 @@ def extract_project_name(cwd: str) -> Optional[str]:
     return None
 
 
+def save_active_injections(tracker: InjectionTracker, session_id: str):
+    """Save active injections to file for observe hook to track."""
+    try:
+        INJECTIONS_FILE.parent.mkdir(parents=True, exist_ok=True)
+
+        # Load existing injections (from other sessions)
+        existing = {}
+        if INJECTIONS_FILE.exists():
+            try:
+                existing = json.loads(INJECTIONS_FILE.read_text())
+            except:
+                existing = {}
+
+        # Add/update injections from this session
+        for tracking_id, injection in tracker.active_injections.items():
+            existing[tracking_id] = {
+                "tracking_id": tracking_id,
+                "session_id": injection.session_id,
+                "injection_type": injection.injection_type,
+                "content_summary": injection.content_summary,
+                "trigger_conditions": injection.trigger_conditions,
+                "injected_at": injection.injected_at,
+                "outcome": "pending",
+                "outcome_events": []
+            }
+
+        # Clean up old sessions (> 2 hours)
+        import time
+        cutoff = time.time() - 7200
+        existing = {k: v for k, v in existing.items()
+                   if v.get("injected_at", 0) > cutoff}
+
+        INJECTIONS_FILE.write_text(json.dumps(existing))
+    except Exception:
+        pass  # Never fail the hook
+
+
 async def load_and_inject(project_name: Optional[str], session_id: Optional[str] = None) -> Optional[str]:
     """Load context from Mind and format for injection."""
-    injector = ContextInjector()
+    tracker = InjectionTracker()
+    injector = ContextInjector(injection_tracker=tracker)
     suggester = Suggester()
 
     try:
-        # Load context and suggestions in parallel
-        context_task = injector.get_injection_string(project_name)
-        suggestions_task = suggester.load_suggestions_from_mind()
+        # Load context with tracking
+        if session_id:
+            context, tracking_ids = await injector.inject_and_track(session_id, project_name)
+        else:
+            context = await injector.get_injection_string(project_name)
+            tracking_ids = []
 
-        context, _ = await asyncio.gather(context_task, suggestions_task)
+        # Load suggestions
+        await suggester.load_suggestions_from_mind()
 
         # Update suggester context
         if session_id:
@@ -135,6 +179,10 @@ async def load_and_inject(project_name: Optional[str], session_id: Optional[str]
             warning_text = suggester.format_suggestions_for_display(warnings, compact=True)
             if warning_text:
                 parts.append(warning_text)
+
+        # FEEDBACK LOOP: Save active injections for observe hook to track
+        if session_id and tracker.active_injections:
+            save_active_injections(tracker, session_id)
 
         return "\n".join(parts) if parts else None
 

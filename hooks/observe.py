@@ -28,6 +28,8 @@ from lib.intent_inferrer import infer_intent, predict_outcome
 
 # Fast file-based prediction storage
 PREDICTIONS_FILE = Path.home() / ".spark" / "predictions.json"
+# Active injections file (for feedback tracking)
+INJECTIONS_FILE = Path.home() / ".spark" / "active_injections.json"
 
 
 def get_event_type(hook_event_name: str) -> EventType:
@@ -144,6 +146,73 @@ def resolve_prediction(session_id: str, tool_name: str, success: bool, error: st
         return {}
 
 
+def track_injection_feedback(session_id: str, tool_name: str, success: bool) -> dict:
+    """
+    Track tool usage against active injections (advice feedback).
+
+    This closes the feedback loop - we learn if injected advice was followed
+    and whether it helped.
+
+    Returns feedback data to include in event.
+    """
+    try:
+        if not INJECTIONS_FILE.exists():
+            return {}
+
+        injections = json.loads(INJECTIONS_FILE.read_text())
+        feedback = {}
+
+        # Check each active injection for this session
+        updated = False
+        for inj_id, inj in list(injections.items()):
+            if inj.get("session_id") != session_id:
+                continue
+
+            trigger = inj.get("trigger_conditions", {})
+            outcome_events = inj.get("outcome_events", [])
+
+            # Track this tool usage
+            outcome_events.append({
+                "tool": tool_name,
+                "success": success,
+                "timestamp": time.time()
+            })
+            inj["outcome_events"] = outcome_events
+            updated = True
+
+            # Check if this tool matches advice
+            recommended_tool = trigger.get("recommended_tool")
+            if recommended_tool and tool_name == recommended_tool:
+                inj["followed"] = True
+                feedback["advice_followed"] = recommended_tool
+
+            # Check for warned errors
+            warned_error = trigger.get("warned_error", "")
+            if not success and warned_error:
+                # User hit an error we warned about
+                inj["warning_relevant"] = True
+                feedback["warning_hit"] = warned_error[:40]
+
+            # Determine outcome if we have enough events (3+)
+            if len(outcome_events) >= 3 and inj.get("outcome") == "pending":
+                if inj.get("followed"):
+                    inj["outcome"] = "followed"
+                    feedback["outcome_determined"] = "followed"
+                elif inj.get("warning_relevant"):
+                    inj["outcome"] = "warning_ignored"
+                    feedback["outcome_determined"] = "warning_ignored"
+                else:
+                    inj["outcome"] = "ignored"
+
+        if updated:
+            INJECTIONS_FILE.write_text(json.dumps(injections))
+
+        return feedback
+
+    except Exception:
+        return {}
+
+
 def main():
     """
     Main hook entry point.
@@ -219,6 +288,11 @@ def main():
             # If there's a learning, include it prominently
             if resolution.get("learning"):
                 data["reasoning_learning"] = resolution["learning"]
+
+        # FEEDBACK: Track tool usage against injected advice
+        feedback = track_injection_feedback(session_id, tool_name, success)
+        if feedback:
+            data["advice_feedback"] = feedback
 
     # Queue the event (fast file append)
     quick_capture(event_type, session_id, data, **kwargs)
