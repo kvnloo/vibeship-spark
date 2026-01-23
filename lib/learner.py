@@ -1026,27 +1026,47 @@ class SparkLearner:
             )
 
             for learning in learnings:
+                content = learning.get("content", "")
                 # Extract signature from metadata if present
                 metadata = learning.get("metadata", {})
                 if "signature" in metadata:
                     signatures.add(metadata["signature"])
                 else:
-                    # Generate signature from content for older patterns
-                    content = learning.get("content", "")
-                    # Extract pattern type from content
+                    # Parse signature from content since Mind Lite doesn't return metadata
+                    # Format: "LEARNING [TYPE]: Description. Conditions: tool=X, ..."
                     if "TOOL_EFFECTIVENESS" in content:
-                        tool = metadata.get("tool", "")
-                        if tool:
-                            signatures.add(f"tool_eff:{tool}")
+                        # Extract tool from "tool=X" in conditions
+                        if "tool=" in content:
+                            tool = content.split("tool=")[1].split(",")[0].split(".")[0].strip()
+                            if tool:
+                                signatures.add(f"tool_eff:{tool}")
                     elif "ERROR_CATEGORY" in content:
-                        tool = metadata.get("tool", "")
-                        error = metadata.get("error_category", "")
+                        # Extract tool and error from conditions
+                        tool = ""
+                        error = ""
+                        if "tool=" in content:
+                            tool = content.split("tool=")[1].split(",")[0].split(".")[0].strip()
+                        if "error=" in content:
+                            error = content.split("error=")[1].split(",")[0].split(".")[0].strip()
                         if tool and error:
                             signatures.add(f"error:{tool}:{error}")
                     elif "GOAL_STRATEGY" in content:
-                        goal_type = metadata.get("goal_type", "")
-                        if goal_type:
-                            signatures.add(f"goal:{goal_type}")
+                        # Extract goal type from "For TYPE:" pattern
+                        if "For " in content:
+                            goal_type = content.split("For ")[1].split(":")[0].strip()
+                            if goal_type:
+                                signatures.add(f"goal:{goal_type}")
+                    elif "TOOL_SEQUENCE" in content:
+                        # Extract sequence from "sequence=['X', 'Y']" pattern
+                        if "sequence=" in content:
+                            seq_str = content.split("sequence=")[1].split("]")[0] + "]"
+                            try:
+                                import ast
+                                seq = ast.literal_eval(seq_str)
+                                if seq:
+                                    signatures.add(f"seq:{'-'.join(seq)}")
+                            except:
+                                pass
 
         except Exception:
             pass  # If Mind unavailable, proceed without dedup
