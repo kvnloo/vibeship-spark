@@ -18,6 +18,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 
 from .mind_client import MindClient, TemporalLevel, ContentType
+from .injection_tracker import InjectionTracker
 
 
 @dataclass
@@ -64,8 +65,11 @@ class ContextInjector:
     MAX_CONTEXT_CHARS = 1000
     MAX_ITEMS_PER_CATEGORY = 3
 
-    def __init__(self, mind_client: Optional[MindClient] = None):
+    def __init__(self, mind_client: Optional[MindClient] = None, injection_tracker: Optional[InjectionTracker] = None):
         self.mind = mind_client or MindClient(timeout=2.0)
+        self.tracker = injection_tracker
+        self.current_session_id: Optional[str] = None
+        self.active_tracking_ids: List[str] = []
 
     async def gather_context(self, project_name: Optional[str] = None) -> InjectionContext:
         """
@@ -351,6 +355,97 @@ class ContextInjector:
         """
         context = await self.gather_context(project_name)
         return self.format_for_injection(context)
+
+    async def inject_and_track(
+        self,
+        session_id: str,
+        project_name: Optional[str] = None
+    ) -> Tuple[Optional[str], List[str]]:
+        """
+        Gather context, format it, and tag all injections for tracking.
+
+        This is the M5 feedback loop entry point. Each piece of advice
+        is tagged so we can track whether it was followed.
+
+        Args:
+            session_id: Current session ID
+            project_name: Optional project to filter by
+
+        Returns:
+            (injection_string, list of tracking_ids)
+        """
+        self.current_session_id = session_id
+        self.active_tracking_ids = []
+
+        context = await self.gather_context(project_name)
+        if not context.has_content:
+            return None, []
+
+        # Tag each piece of advice with the tracker
+        if self.tracker:
+            # Tag tool insights
+            for insight in context.tool_insights:
+                tracking_id = self.tracker.tag_injection(
+                    learning_id=f"tool_insight_{hash(insight) % 10000}",
+                    session_id=session_id,
+                    injection_type="tool_recommendation",
+                    content_summary=insight[:50],
+                    trigger_conditions={"insight": insight}
+                )
+                self.active_tracking_ids.append(tracking_id)
+
+            # Tag error warnings
+            for warning in context.error_warnings:
+                tracking_id = self.tracker.tag_injection(
+                    learning_id=f"error_warning_{hash(warning) % 10000}",
+                    session_id=session_id,
+                    injection_type="error_warning",
+                    content_summary=warning[:50],
+                    trigger_conditions={"warned_error": warning}
+                )
+                self.active_tracking_ids.append(tracking_id)
+
+            # Tag agent recommendations
+            for agent, conf, reason in context.agent_recommendations:
+                tracking_id = self.tracker.tag_injection(
+                    learning_id=f"agent_rec_{agent}",
+                    session_id=session_id,
+                    injection_type="tool_recommendation",
+                    content_summary=f"Use {agent} agent",
+                    trigger_conditions={"recommended_tool": agent, "reason": reason}
+                )
+                self.active_tracking_ids.append(tracking_id)
+
+            # Tag skill recommendations
+            for skill, conf, reason in context.skill_recommendations:
+                tracking_id = self.tracker.tag_injection(
+                    learning_id=f"skill_rec_{skill}",
+                    session_id=session_id,
+                    injection_type="skill_suggestion",
+                    content_summary=f"Use {skill} skill",
+                    trigger_conditions={"suggested_skill": skill, "reason": reason}
+                )
+                self.active_tracking_ids.append(tracking_id)
+
+        injection_string = self.format_for_injection(context)
+        return injection_string, self.active_tracking_ids
+
+    def get_tracking_summary(self) -> Dict:
+        """Get summary of active tracking for this session."""
+        if not self.tracker:
+            return {"tracking_enabled": False}
+
+        stats = self.tracker.get_stats()
+        return {
+            "tracking_enabled": True,
+            "session_id": self.current_session_id,
+            "active_injections": len(self.active_tracking_ids),
+            "total_injections": stats.total_injections,
+            "follow_rate": f"{stats.follow_rate:.0%}",
+            "followed": stats.followed_count,
+            "ignored": stats.ignored_count,
+            "contradicted": stats.contradicted_count
+        }
 
     def get_task_specific_advice(
         self,
