@@ -75,6 +75,15 @@ def main():
         kwargs["tool_name"] = tool_name
         kwargs["tool_input"] = tool_input
 
+        # Enhanced tracking for Skill and Task tools
+        if tool_name == "Skill":
+            data["skill_id"] = tool_input.get("skill", "unknown")
+            data["skill_args"] = tool_input.get("args")
+        elif tool_name == "Task":
+            data["agent_type"] = tool_input.get("subagent_type", "general-purpose")
+            data["agent_prompt"] = (tool_input.get("prompt", "")[:200]
+                                    if tool_input.get("prompt") else None)
+
     # For failure events, include error info
     if "tool_error" in input_data:
         kwargs["error"] = input_data.get("tool_error")

@@ -26,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from lib.queue import SparkQueue, EventType
 from lib.mind_client import MindClient, Memory, ContentType, TemporalLevel
 from lib.learner import SparkLearner
+from lib.skill_evolver import SkillEvolver
 
 
 # Configure logging
@@ -48,9 +49,11 @@ class SparkProcessor:
         self.queue = SparkQueue()
         self.mind = MindClient()
         self.learner = SparkLearner(self.mind)
+        self.skill_evolver = SkillEvolver(self.mind)
         self.running = False
         self.processed_count = 0
         self.patterns_found = 0
+        self.skills_tracked = 0
 
     async def initialize(self):
         """Initialize processor, load existing learnings."""
@@ -60,7 +63,8 @@ class SparkProcessor:
         if await self.mind.is_available():
             log.info("Connected to Vibeship Mind")
             await self.learner.load_existing_learnings()
-            log.info(f"Loaded {len(self.learner.tool_weights)} tool weights")
+            await self.skill_evolver.load_existing_data()
+            log.info(f"Loaded {len(self.learner.tool_weights)} tool weights, {len(self.skill_evolver.skill_stats)} skill stats")
         else:
             log.warning("Mind not available - will retry on next cycle")
 
@@ -90,6 +94,28 @@ class SparkProcessor:
                 log.info(f"Stored {stored} learnings in Mind")
                 self.patterns_found += stored
 
+        # Process skill events
+        skill_usages = await self.skill_evolver.process_events(events)
+        if skill_usages:
+            self.skills_tracked += len(skill_usages)
+            log.info(f"Tracked {len(skill_usages)} skill usages")
+
+            # Identify gaps and propose improvements periodically
+            if self.skills_tracked >= 10:
+                gaps = self.skill_evolver.identify_gaps()
+                if gaps:
+                    log.info(f"Identified {len(gaps)} skill gaps")
+
+                improvements = self.skill_evolver.propose_improvements()
+                if improvements:
+                    log.info(f"Proposed {len(improvements)} skill improvements")
+
+                # Store skill learnings
+                if await self.mind.is_available():
+                    stored = await self.skill_evolver.store_learnings_in_mind()
+                    if stored:
+                        log.info(f"Stored {stored} skill learnings")
+
         self.processed_count += len(events)
 
         # Log tool effectiveness summary
@@ -97,6 +123,13 @@ class SparkProcessor:
         if rankings:
             log.info("Tool effectiveness: " + ", ".join(
                 f"{t}:{r:.0%}" for t, r in rankings[:5]
+            ))
+
+        # Log skill effectiveness if available
+        skill_rankings = self.skill_evolver.get_skill_ranking()
+        if skill_rankings:
+            log.info("Skill effectiveness: " + ", ".join(
+                f"{s}:{r:.0%}" for s, r, _ in skill_rankings[:3]
             ))
 
         return len(events)
@@ -165,12 +198,28 @@ class SparkProcessor:
         for pattern_type, patterns in by_type.items():
             log.info(f"  {pattern_type}: {len(patterns)} patterns")
 
+        # Skill evolution analysis
+        skill_gaps = self.skill_evolver.identify_gaps()
+        skill_improvements = self.skill_evolver.propose_improvements()
+
+        if skill_gaps:
+            log.info(f"Skill gaps identified: {len(skill_gaps)}")
+            for gap in skill_gaps[:3]:
+                log.info(f"  - {gap.task_type}: {gap.current_success_rate:.0%} success, potential +{gap.improvement_potential:.0%}")
+
+        if skill_improvements:
+            log.info(f"Skill improvements proposed: {len(skill_improvements)}")
+            for imp in skill_improvements[:3]:
+                log.info(f"  - {imp.skill_id}: {imp.improvement_type} (priority {imp.priority})")
+
         # Store meta-learning about our learning
+        skill_summary = f"Skills tracked: {self.skills_tracked}. Gaps: {len(skill_gaps)}. Improvements: {len(skill_improvements)}."
         meta_content = f"""META-REFLECTION [{datetime.now().isoformat()}]:
 Spark has accumulated {len(learnings)} learnings across {len(by_type)} pattern types.
 Pattern distribution: {', '.join(f'{k}={len(v)}' for k, v in by_type.items())}.
 Total events processed: {self.processed_count}.
-Patterns extracted this session: {self.patterns_found}."""
+Patterns extracted this session: {self.patterns_found}.
+{skill_summary}"""
 
         await self.mind.store(Memory(
             content=meta_content,
@@ -193,9 +242,13 @@ Patterns extracted this session: {self.patterns_found}."""
             "queue_size": self.queue.size(),
             "processed_count": self.processed_count,
             "patterns_found": self.patterns_found,
+            "skills_tracked": self.skills_tracked,
             "mind_available": await self.mind.is_available(),
             "tool_weights": dict(self.learner.tool_weights),
             "skill_weights": dict(self.learner.skill_weights),
+            "skill_stats": {k: v.success_rate for k, v in self.skill_evolver.skill_stats.items()},
+            "skill_gaps": len(self.skill_evolver.gaps_identified),
+            "skill_improvements": len(self.skill_evolver.improvements_proposed),
         }
 
 
@@ -243,9 +296,16 @@ async def main():
         print(f"   Queue size: {status['queue_size']}")
         print(f"   Processed: {status['processed_count']}")
         print(f"   Patterns found: {status['patterns_found']}")
+        print(f"   Skills tracked: {status['skills_tracked']}")
         print(f"   Mind available: {status['mind_available']}")
         if status['tool_weights']:
             print(f"   Tool weights: {status['tool_weights']}")
+        if status['skill_stats']:
+            print(f"   Skill effectiveness: {status['skill_stats']}")
+        if status['skill_gaps']:
+            print(f"   Skill gaps identified: {status['skill_gaps']}")
+        if status['skill_improvements']:
+            print(f"   Improvements proposed: {status['skill_improvements']}")
 
     # Cleanup
     await processor.mind.close()
