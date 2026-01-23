@@ -30,6 +30,7 @@ class InjectionContext:
     error_warnings: List[str] = field(default_factory=list)
     parallel_patterns: List[str] = field(default_factory=list)
     project_specific: List[str] = field(default_factory=list)
+    goal_strategies: List[Tuple[str, str, float]] = field(default_factory=list)  # (goal_type, approach, success_rate)
 
     @property
     def has_content(self) -> bool:
@@ -40,7 +41,8 @@ class InjectionContext:
             self.agent_recommendations or
             self.error_warnings or
             self.parallel_patterns or
-            self.project_specific
+            self.project_specific or
+            self.goal_strategies
         )
 
     def total_items(self) -> int:
@@ -51,7 +53,8 @@ class InjectionContext:
             len(self.agent_recommendations) +
             len(self.error_warnings) +
             len(self.parallel_patterns) +
-            len(self.project_specific)
+            len(self.project_specific) +
+            len(self.goal_strategies)
         )
 
 
@@ -111,6 +114,9 @@ class ContextInjector:
             context.error_warnings = results[3]
         if not isinstance(results[4], Exception):
             context.parallel_patterns = results[4]
+
+        # Gather goal strategies (sync, from local file)
+        context.goal_strategies = self._gather_goal_strategies()
 
         return context
 
@@ -241,6 +247,67 @@ class ContextInjector:
 
         return patterns
 
+    def _gather_goal_strategies(self) -> List[Tuple[str, str, float]]:
+        """
+        Gather learned strategies from completed goals.
+
+        Reads from local goals file (sync, fast).
+        Returns list of (goal_type, approach, success_rate).
+        """
+        from pathlib import Path
+        import json
+
+        GOALS_FILE = Path.home() / ".spark" / "active_goals.json"
+
+        if not GOALS_FILE.exists():
+            return []
+
+        try:
+            goals = json.loads(GOALS_FILE.read_text())
+        except Exception:
+            return []
+
+        # Group completed goals by type
+        by_type: Dict[str, List[Dict]] = {}
+        for g_id, g in goals.items():
+            if g.get("status") == "completed" and g.get("success_score", 0) >= 0.6:
+                goal_type = g.get("goal_type", "unknown")
+                if goal_type not in by_type:
+                    by_type[goal_type] = []
+                by_type[goal_type].append(g)
+
+        strategies = []
+        for goal_type, completed in by_type.items():
+            if not completed:
+                continue
+
+            # Calculate average success rate
+            success_scores = [g.get("success_score", 0.5) for g in completed]
+            avg_success = sum(success_scores) / len(success_scores)
+
+            # Get most recent successful approach
+            most_recent = max(completed, key=lambda g: g.get("completed_at", 0))
+            actions = most_recent.get("actions", [])
+
+            # Build approach string (tool sequence)
+            tools = [a.get("tool") for a in actions if a.get("tool")][:5]
+            if tools:
+                # Deduplicate consecutive tools
+                deduped = [tools[0]]
+                for t in tools[1:]:
+                    if t != deduped[-1]:
+                        deduped.append(t)
+
+                approach = " -> ".join(deduped[:4])
+                if len(deduped) > 4:
+                    approach += " ..."
+
+                strategies.append((goal_type, approach, avg_success))
+
+        # Sort by success rate (highest first)
+        strategies.sort(key=lambda x: x[2], reverse=True)
+        return strategies[:self.MAX_ITEMS_PER_CATEGORY]
+
     def _format_tool_insight(self, content: str) -> Optional[str]:
         """Format a tool effectiveness or sequence learning."""
         # Handle both TOOL_EFFECTIVENESS and TOOL_SEQUENCE patterns
@@ -346,6 +413,17 @@ class ContextInjector:
                 lines.append(text)
                 total_chars += len(text) + 1
 
+        # Goal strategies (learned approaches)
+        if context.goal_strategies and total_chars < self.MAX_CONTEXT_CHARS - 100:
+            lines.append("  [Strategy]:")
+            total_chars += 14
+            for goal_type, approach, success_rate in context.goal_strategies[:2]:
+                text = f"    {goal_type}: {approach} ({success_rate:.0%})"
+                if total_chars + len(text) > self.MAX_CONTEXT_CHARS:
+                    break
+                lines.append(text)
+                total_chars += len(text) + 1
+
         # Error warnings (important)
         if context.error_warnings and total_chars < self.MAX_CONTEXT_CHARS - 100:
             lines.append("  [!] Watch for:")
@@ -444,6 +522,21 @@ class ContextInjector:
                     injection_type="skill_suggestion",
                     content_summary=f"Use {skill} skill",
                     trigger_conditions={"suggested_skill": skill, "reason": reason}
+                )
+                self.active_tracking_ids.append(tracking_id)
+
+            # Tag goal strategy recommendations
+            for goal_type, approach, success_rate in context.goal_strategies:
+                tracking_id = self.tracker.tag_injection(
+                    learning_id=f"strategy_{goal_type}",
+                    session_id=session_id,
+                    injection_type="strategy_recommendation",
+                    content_summary=f"For {goal_type}: {approach}",
+                    trigger_conditions={
+                        "goal_type": goal_type,
+                        "recommended_approach": approach,
+                        "success_rate": success_rate
+                    }
                 )
                 self.active_tracking_ids.append(tracking_id)
 
