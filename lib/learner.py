@@ -425,7 +425,7 @@ class SparkLearner:
 
         # Pattern 1: Tool effectiveness
         for tool_name, stats in self.tool_stats.items():
-            if stats.total_calls >= 5:  # Need minimum samples
+            if stats.total_calls >= 3:  # Lowered for faster learning
                 pattern = Pattern(
                     pattern_type="tool_effectiveness",
                     description=f"{tool_name} has {stats.success_rate:.0%} success rate",
@@ -444,7 +444,7 @@ class SparkLearner:
         # Pattern 2: Error patterns with fixes
         for tool_name, stats in self.tool_stats.items():
             for error_category, error_info in stats.error_details.items():
-                if error_info.count >= 2:  # Recurring error (lowered threshold)
+                if error_info.count >= 1:  # Learn from FIRST error occurrence
                     fix = error_info.suggested_fix or self._get_error_avoidance(tool_name, error_category)
                     recovery_rate = error_info.recovered / error_info.count if error_info.count > 0 else 0
 
@@ -590,8 +590,8 @@ class SparkLearner:
         patterns = []
 
         for key, recovery in self._recovery_patterns.items():
-            # Need at least 2 occurrences to be a pattern
-            if recovery.count >= 2:
+            # Learn from first recovery (lowered from 2)
+            if recovery.count >= 1:
                 pattern = Pattern(
                     pattern_type="recovery_strategy",
                     description=f"When {recovery.failed_tool} fails with {recovery.failed_error}, "
@@ -937,8 +937,14 @@ class SparkLearner:
         existing_patterns = await self._get_existing_pattern_signatures()
 
         for pattern in patterns:
-            # Lower threshold for goal strategies (early learning)
-            min_confidence = 0.5 if pattern.pattern_type == "goal_strategy" else 0.7
+            # Lowered thresholds for faster learning during development
+            # error_category and recovery need to learn from first occurrence
+            if pattern.pattern_type in ("error_category", "recovery_strategy", "error_recovery"):
+                min_confidence = 0.3  # Very low - learn immediately
+            elif pattern.pattern_type in ("goal_strategy", "reasoning_gap"):
+                min_confidence = 0.4  # Low - learn early
+            else:
+                min_confidence = 0.5  # Moderate - still faster than before
             if pattern.confidence >= min_confidence:
                 # Create signature for deduplication
                 signature = self._create_pattern_signature(pattern)

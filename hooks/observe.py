@@ -579,10 +579,24 @@ def main():
             data["pre_tool_warning"] = warning
 
     # For failure events, include error info
+    # Claude Code may send error in different fields - check all possibilities
     error = None
-    if "tool_error" in input_data:
-        error = input_data.get("tool_error")
-        kwargs["error"] = error
+    if event_type == EventType.POST_TOOL_FAILURE:
+        # Try multiple possible error field names
+        error = (
+            input_data.get("tool_error") or
+            input_data.get("error") or
+            input_data.get("tool_result") or
+            input_data.get("result") or
+            input_data.get("message") or
+            input_data.get("stderr") or
+            ""
+        )
+        # If still no error but we know it failed, create a generic one
+        if not error and tool_name:
+            error = f"{tool_name} failed (no error message provided)"
+        if error:
+            kwargs["error"] = str(error)[:500]  # Truncate long errors
 
     # REASONING: On POST_TOOL/POST_TOOL_FAILURE, resolve prediction
     if event_type in (EventType.POST_TOOL, EventType.POST_TOOL_FAILURE) and tool_name:

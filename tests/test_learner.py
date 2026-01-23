@@ -368,7 +368,7 @@ class TestStorePatterns:
 
     @pytest.mark.asyncio
     async def test_skips_low_confidence_patterns(self, mock_mind_client):
-        """Skips patterns with confidence < 0.7."""
+        """Skips patterns with confidence below threshold (0.5 for tool_effectiveness)."""
         learner = SparkLearner(mind_client=mock_mind_client)
 
         patterns = [
@@ -376,8 +376,8 @@ class TestStorePatterns:
                 pattern_type="tool_effectiveness",
                 description="Bash might work",
                 conditions=["tool=Bash"],
-                confidence=0.5,  # Too low
-                sample_size=5,
+                confidence=0.2,  # Below threshold (0.5)
+                sample_size=2,
                 metadata={"tool": "Bash"}
             )
         ]
