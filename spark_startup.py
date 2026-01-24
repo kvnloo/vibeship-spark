@@ -118,12 +118,31 @@ class StartupValidator:
 
         try:
             import os
+            import subprocess
+            import sys
             pid = int(pid_file.read_text().strip())
-            try:
-                os.kill(pid, 0)
+
+            # Check if process is running (cross-platform)
+            is_running = False
+            if sys.platform == "win32":
+                # Windows: use tasklist
+                result = subprocess.run(
+                    ["tasklist", "/FI", f"PID eq {pid}"],
+                    capture_output=True, text=True
+                )
+                is_running = str(pid) in result.stdout
+            else:
+                # Unix: use kill -0
+                try:
+                    os.kill(pid, 0)
+                    is_running = True
+                except OSError:
+                    is_running = False
+
+            if is_running:
                 self.checks.append(("Daemon", True, f"Running (PID {pid})"))
                 print("OK")
-            except (OSError, ProcessLookupError):
+            else:
                 self.checks.append(("Daemon", False, "Stale PID"))
                 self.warnings.append("Daemon has stale PID - consider restarting")
                 print("WARN")

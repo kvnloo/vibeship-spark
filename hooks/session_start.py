@@ -112,7 +112,7 @@ def load_self_awareness() -> Optional[str]:
 
 
 def is_daemon_running() -> bool:
-    """Check if processor daemon is already running."""
+    """Check if processor daemon is already running. Clean up stale PID if not."""
     if not PID_FILE.exists():
         return False
 
@@ -125,12 +125,29 @@ def is_daemon_running() -> bool:
                 ["tasklist", "/FI", f"PID eq {pid}"],
                 capture_output=True, text=True
             )
-            return str(pid) in result.stdout
+            is_running = str(pid) in result.stdout
         else:
             # Unix: send signal 0
-            os.kill(pid, 0)
-            return True
+            try:
+                os.kill(pid, 0)
+                is_running = True
+            except OSError:
+                is_running = False
+
+        # AUTO-HEAL: Clean up stale PID file if process not running
+        if not is_running:
+            try:
+                PID_FILE.unlink()
+            except:
+                pass
+            return False
+        return True
     except (ValueError, OSError, subprocess.SubprocessError):
+        # AUTO-HEAL: Remove corrupted PID file
+        try:
+            PID_FILE.unlink()
+        except:
+            pass
         return False
 
 
@@ -171,6 +188,76 @@ def ensure_daemon_running():
     """Ensure processor daemon is running."""
     if not is_daemon_running():
         start_daemon()
+
+
+def auto_heal_queue():
+    """
+    AUTO-HEAL: Process queue if it's backing up.
+
+    If queue has > 50 events, run processor once in background.
+    This prevents queue from growing indefinitely if daemon isn't keeping up.
+    """
+    queue_file = SPARK_DIR / "queue" / "events.jsonl"
+
+    if not queue_file.exists():
+        return
+
+    try:
+        content = queue_file.read_text()
+        lines = [l for l in content.strip().split("\n") if l.strip()]
+
+        if len(lines) > 50:
+            # Queue is backing up - trigger processing
+            processor_path = Path(__file__).parent.parent / "processor.py"
+            if processor_path.exists():
+                subprocess.Popen(
+                    [sys.executable, str(processor_path), "--mode", "once"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True if sys.platform != "win32" else False,
+                    creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0
+                )
+    except Exception:
+        pass  # Never fail the hook
+
+
+def quick_health_check() -> dict:
+    """
+    Quick health check for session start.
+
+    Returns status dict with any issues found.
+    Must complete in < 100ms (no Mind calls).
+    """
+    issues = []
+
+    # Check queue size
+    queue_file = SPARK_DIR / "queue" / "events.jsonl"
+    queue_size = 0
+    if queue_file.exists():
+        try:
+            content = queue_file.read_text()
+            queue_size = len([l for l in content.strip().split("\n") if l.strip()])
+            if queue_size > 100:
+                issues.append(f"queue_backed_up:{queue_size}")
+        except:
+            pass
+
+    # Check daemon
+    daemon_ok = is_daemon_running()
+    if not daemon_ok:
+        issues.append("daemon_starting")
+
+    # Check for recent learnings (just file existence)
+    learning_files = list((SPARK_DIR / "queue").glob("processed*.jsonl"))
+    if not learning_files:
+        issues.append("no_processed_events")
+
+    return {
+        "healthy": len(issues) == 0,
+        "issues": issues,
+        "queue_size": queue_size,
+        "daemon_running": daemon_ok
+    }
 
 
 def extract_project_name(cwd: str) -> Optional[str]:
@@ -274,8 +361,14 @@ async def load_and_inject(project_name: Optional[str], session_id: Optional[str]
 
 def main():
     """Main hook entry point."""
-    # First, ensure daemon is running for continuous learning
+    # AUTO-HEAL #1: Clean up stale PID and ensure daemon is running
     ensure_daemon_running()
+
+    # AUTO-HEAL #2: Process queue if it's backing up
+    auto_heal_queue()
+
+    # Quick health check (no Mind calls, fast)
+    health = quick_health_check()
 
     try:
         # Read hook input
@@ -299,14 +392,25 @@ def main():
     except Exception:
         context = None
 
-    # Output context for Claude
+    # Build output
+    output = {"continue": True}
+
+    # Include context if available
+    hook_output = {}
     if context:
-        output = {
-            "continue": True,
-            "hookSpecificOutput": {
-                "additionalContext": context
-            }
-        }
+        hook_output["additionalContext"] = context
+
+    # Include health status (for visibility)
+    if not health["healthy"]:
+        # Add health warning to context
+        health_warning = f"[SPARK AUTO-HEALING] Issues detected: {', '.join(health['issues'])}"
+        if hook_output.get("additionalContext"):
+            hook_output["additionalContext"] = health_warning + "\n\n" + hook_output["additionalContext"]
+        else:
+            hook_output["additionalContext"] = health_warning
+
+    if hook_output:
+        output["hookSpecificOutput"] = hook_output
         print(json.dumps(output))
 
     sys.exit(0)
