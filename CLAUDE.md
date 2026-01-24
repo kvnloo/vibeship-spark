@@ -26,29 +26,37 @@ Spark is part of the **Vibeship Ecosystem**:
 
 ## Quick Start
 
-### 1. Start Mind (Required)
+### New Installation
 
 ```bash
-# From the-mind directory
-start_mind_lite.bat
-
-# Or manually:
-cd C:\Users\USER\Desktop\the-mind\vibeship-mind
-python src\mind\lite_tier.py
+git clone https://github.com/vibeforge1111/vibeship-spark.git
+cd vibeship-spark
+python spark_install.py
 ```
 
-### 2. Verify Spark
+This automatically:
+- Detects Mind location
+- Creates config at `~/.spark/config.json`
+- Installs all 7 hooks in Claude Code
+- Sets up MCP server
+
+### Verify Installation
 
 ```bash
-cd C:\Users\USER\Desktop\vibeship-spark
-python spark_cli.py health
+python spark_cli.py startup
 ```
 
-Expected output: `21/21 components healthy`
+Expected output: `STATUS: READY (7/7 checks passed)`
 
-### 3. That's It!
+### That's It!
 
-Spark hooks are already installed. They observe every tool call automatically.
+Everything is **100% automatic** now:
+- Mind auto-starts at session start
+- Daemon auto-starts
+- Queue auto-processes
+- Learnings auto-inject
+
+No manual steps required. Just open Claude Code and Spark activates.
 
 ---
 

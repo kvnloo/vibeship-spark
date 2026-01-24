@@ -44,6 +44,18 @@ you don't install spark.
 spark installs itself.
 ```
 
+*(but if you insist...)*
+
+```bash
+git clone https://github.com/vibeforge1111/vibeship-spark.git
+cd vibeship-spark
+python spark_install.py
+```
+
+*one command. everything automatic.*
+
+see [INSTALL.md](INSTALL.md) for details.
+
 ---
 
 ### usage
