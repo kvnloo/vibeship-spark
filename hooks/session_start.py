@@ -38,16 +38,41 @@ INJECTIONS_FILE = SPARK_DIR / "active_injections.json"
 IMPROVEMENT_LOG = SPARK_DIR / "improvement_log.json"
 GOALS_FILE = SPARK_DIR / "active_goals.json"
 
-# Mind Lite location
-MIND_LITE_PATH = Path.home() / "Desktop" / "the-mind" / "vibeship-mind" / "src" / "mind" / "lite_tier.py"
-MIND_API_URL = "http://localhost:8080"
+# Config-based Mind settings (loaded from ~/.spark/config.json)
+def _get_mind_config():
+    """Get Mind config, with fallback to defaults."""
+    try:
+        from lib.config import get_config
+        config = get_config()
+        return {
+            "lite_path": config.mind_lite_path,
+            "api_url": config.mind_api_url,
+            "auto_start": config.mind_auto_start
+        }
+    except:
+        # Fallback to hardcoded defaults
+        return {
+            "lite_path": Path.home() / "Desktop" / "the-mind" / "vibeship-mind" / "src" / "mind" / "lite_tier.py",
+            "api_url": "http://localhost:8080",
+            "auto_start": True
+        }
+
+# Lazy-loaded config
+_mind_config = None
+
+def get_mind_config():
+    global _mind_config
+    if _mind_config is None:
+        _mind_config = _get_mind_config()
+    return _mind_config
 
 
 def is_mind_running() -> bool:
     """Check if Mind API is responding."""
     try:
         import urllib.request
-        req = urllib.request.Request(f"{MIND_API_URL}/health", method="GET")
+        config = get_mind_config()
+        req = urllib.request.Request(f"{config['api_url']}/health", method="GET")
         with urllib.request.urlopen(req, timeout=2) as resp:
             return resp.status == 200
     except Exception:
@@ -87,7 +112,13 @@ def is_mind_process_running() -> bool:
 
 def start_mind():
     """Start Mind Lite API in background."""
-    if not MIND_LITE_PATH.exists():
+    config = get_mind_config()
+    mind_path = config.get("lite_path")
+
+    if not mind_path or not mind_path.exists():
+        return False
+
+    if not config.get("auto_start", True):
         return False
 
     try:
@@ -96,18 +127,18 @@ def start_mind():
         # Start Mind Lite
         if sys.platform == "win32":
             process = subprocess.Popen(
-                [sys.executable, str(MIND_LITE_PATH)],
+                [sys.executable, str(mind_path)],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                cwd=str(MIND_LITE_PATH.parent.parent.parent),  # vibeship-mind dir
+                cwd=str(mind_path.parent.parent.parent),  # vibeship-mind dir
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
             )
         else:
             process = subprocess.Popen(
-                [sys.executable, str(MIND_LITE_PATH)],
+                [sys.executable, str(mind_path)],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                cwd=str(MIND_LITE_PATH.parent.parent.parent),
+                cwd=str(mind_path.parent.parent.parent),
                 start_new_session=True
             )
 
