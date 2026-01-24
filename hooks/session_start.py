@@ -31,11 +31,118 @@ from lib.injection_tracker import InjectionTracker
 # Daemon management
 SPARK_DIR = Path.home() / ".spark"
 PID_FILE = SPARK_DIR / "daemon.pid"
+MIND_PID_FILE = SPARK_DIR / "mind.pid"
 INJECTIONS_FILE = SPARK_DIR / "active_injections.json"
 
 # Self-awareness files (defined after SPARK_DIR)
 IMPROVEMENT_LOG = SPARK_DIR / "improvement_log.json"
 GOALS_FILE = SPARK_DIR / "active_goals.json"
+
+# Mind Lite location
+MIND_LITE_PATH = Path.home() / "Desktop" / "the-mind" / "vibeship-mind" / "src" / "mind" / "lite_tier.py"
+MIND_API_URL = "http://localhost:8080"
+
+
+def is_mind_running() -> bool:
+    """Check if Mind API is responding."""
+    try:
+        import urllib.request
+        req = urllib.request.Request(f"{MIND_API_URL}/health", method="GET")
+        with urllib.request.urlopen(req, timeout=2) as resp:
+            return resp.status == 200
+    except Exception:
+        return False
+
+
+def is_mind_process_running() -> bool:
+    """Check if Mind process is running via PID file."""
+    if not MIND_PID_FILE.exists():
+        return False
+
+    try:
+        pid = int(MIND_PID_FILE.read_text().strip())
+        if sys.platform == "win32":
+            result = subprocess.run(
+                ["tasklist", "/FI", f"PID eq {pid}"],
+                capture_output=True, text=True
+            )
+            is_running = str(pid) in result.stdout
+        else:
+            try:
+                os.kill(pid, 0)
+                is_running = True
+            except OSError:
+                is_running = False
+
+        if not is_running:
+            try:
+                MIND_PID_FILE.unlink()
+            except:
+                pass
+            return False
+        return True
+    except:
+        return False
+
+
+def start_mind():
+    """Start Mind Lite API in background."""
+    if not MIND_LITE_PATH.exists():
+        return False
+
+    try:
+        SPARK_DIR.mkdir(parents=True, exist_ok=True)
+
+        # Start Mind Lite
+        if sys.platform == "win32":
+            process = subprocess.Popen(
+                [sys.executable, str(MIND_LITE_PATH)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                cwd=str(MIND_LITE_PATH.parent.parent.parent),  # vibeship-mind dir
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+            )
+        else:
+            process = subprocess.Popen(
+                [sys.executable, str(MIND_LITE_PATH)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                cwd=str(MIND_LITE_PATH.parent.parent.parent),
+                start_new_session=True
+            )
+
+        # Save PID
+        MIND_PID_FILE.write_text(str(process.pid))
+
+        # Wait briefly for Mind to start
+        import time
+        for _ in range(10):  # Try for up to 2 seconds
+            time.sleep(0.2)
+            if is_mind_running():
+                return True
+
+        return False
+    except Exception:
+        return False
+
+
+def ensure_mind_running() -> bool:
+    """Ensure Mind is running, start if not."""
+    # First check if API is responding
+    if is_mind_running():
+        return True
+
+    # Check if process is running but not responding yet
+    if is_mind_process_running():
+        # Wait a bit more
+        import time
+        for _ in range(5):
+            time.sleep(0.2)
+            if is_mind_running():
+                return True
+
+    # Need to start Mind
+    return start_mind()
 
 
 def load_self_awareness() -> Optional[str]:
@@ -361,6 +468,9 @@ async def load_and_inject(project_name: Optional[str], session_id: Optional[str]
 
 def main():
     """Main hook entry point."""
+    # AUTO-HEAL #0: Ensure Mind is running (most critical)
+    mind_started = ensure_mind_running()
+
     # AUTO-HEAL #1: Clean up stale PID and ensure daemon is running
     ensure_daemon_running()
 
@@ -369,6 +479,10 @@ def main():
 
     # Quick health check (no Mind calls, fast)
     health = quick_health_check()
+    health["mind_running"] = mind_started or is_mind_running()
+    if not health["mind_running"]:
+        health["issues"].append("mind_unavailable")
+        health["healthy"] = False
 
     try:
         # Read hook input
